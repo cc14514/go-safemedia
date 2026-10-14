@@ -21,3 +21,10 @@ rad.json
 *.flf
 #Test results file
 TestResults.xml
+# --- Go ---
+bin/
+.codegraph/
+*.test
+# --- 工具链状态（非项目源） ---
+.cortexkit/
+.omo/
