@@ -78,7 +78,7 @@ dist: desktop
 	  'go-safemedia $(VERSION) — $(ARCH)' \
 	  '' \
 	  '包含：' \
-	  '  safemedia.app   桌面外壳（双击运行；首次启动会让你选择/使用 ~/.safemedia/library）' \
+	  '  safemedia.app   桌面外壳（双击运行；密档库由 ~/.safemedia/desktop.json 的 library 指定，默认 ~/.safemedia/library）' \
 	  '  safemedia       命令行（封存/建账户/播放）' \
 	  '' \
 	  '首次使用：' \

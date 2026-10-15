@@ -84,10 +84,10 @@ internal/cli/                 CLI：保持「终端口令 → 预解锁起服务
 ## 6. 外壳（`desktop/`）设计
 
 - `desktop/main.go`：以**锁定态**起引擎 loopback 服务 → embed 引导页 → `assetserver.Middleware` 注入 `__LOOPBACK_URL__`（spike 已实证）→ `OnShutdown` 调引擎 `Close()`（AC3.3）。
-- **目标解析（AC2.1）**，优先级：
-  1. 启动参数（Finder 双击 `.svid` / `open -a safemedia.app <path>` / 拖放）
-  2. 配置 `~/.safemedia/desktop.json` 的 `library_dir`
-  3. 默认 `~/.safemedia/library`
+- **目标解析（AC2.1 的实现偏差，见 §12）**：
+  1. 配置文件 `~/.safemedia/desktop.json` 的 `library`（推荐；双击即生效）
+  2. 默认库 `~/.safemedia/library`（不存在则创建；空库合法）
+  启动参数（argv）仍受支持，但**仅在从终端直接运行二进制时有效**——macOS 经 LaunchServices 启动（双击 / `open`）时参数不会送达（实测 macOS 27，见 `tasks.md` 对齐记录），故不作依赖。
   原生目录选择器（`runtime.OpenDirectoryDialog`）列为后续项，不进首版。
 - **解锁闭包**：`account.LoadKeystoreWithPassphrase(cli.AccountPath(), pw)` → 单档 `vault.Open` / 目录取 `Priv`；口令字节用 `account.Wipe` 清零。
 - 不需要 Node：前端只有一个内嵌引导页（`wails build -s`）。

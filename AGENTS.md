@@ -80,6 +80,7 @@ tests/e2e/           L3 端到端 + REPORT.md + fetch-samples.sh
 5. **不要 `_ = tmpl.Execute(...)`**：模板执行错误会静默把页面截断成半页（曾致播放页只渲染一半且无报错）。渲染失败必须可见（`renderError`）。
 6. **桌面外壳没有任何自动解锁路径，但起真实 `.app` 做冒烟测试会在用户屏幕上弹窗**：用户很可能直接在里面输入口令，此时观察到的「已解锁」是**用户操作**，不是测试结果（曾据此误判为 bug、排查数轮）。要断言解锁语义就用 `tests/integration/desktop_flow_test.go` 的进程内灰盒；起真 `.app` 只用来确认「窗口能看到页面」。
 7. **清密钥必须与解密读取互斥**：`vault.Reader.ReadAt`（解密读）与 `Wipe`（锁定时清零文件密钥）、`play.Library` 的「锁内取私钥启封」与 `wipe()` 都必须串行化，否则 `-race` 报数据竞争（软锁定恰恰会「边流边清零」，必现）。改门控/锁定后跑 `go test -race ./internal/play/...`。
+8. **桌面 `.app` 收不到启动参数**：macOS 经 LaunchServices 启动（双击 / `open`）时 argv 不送达（实测 macOS 27：`open -n -a safemedia.app --args <dir>` 的新实例仍用默认库）。选库一律走 `~/.safemedia/desktop.json` 的 `library`；argv 只在终端直接运行二进制时有效（`make desktop-run ARGS=`）。别在文档里承诺「拖放/`open --args` 换库」。
 
 ## 目录树 / 播放页（目录模式）要点
 

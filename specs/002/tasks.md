@@ -86,4 +86,7 @@
 4. **`-race` 暴露并修复两处真实竞态**（非测试问题）：
    - `vault.Reader`：锁定/关闭时清零文件密钥与正在进行的解密读取之间无同步 → 在 `Reader` 内加 `sync.RWMutex`（`ReadAt` 持读锁、`Wipe` 持写锁）。
    - `play.Library`：`wipe()` 清零私钥与媒体请求「锁内取私钥启封」之间无同步 → 统一用 `l.mu` 串行化。
-5. **`desktopcfg` 新增 `EnsureLibrary`**：目标目录不存在时创建（含 `~/.safemedia/library` 默认库），否则首次双击必然报错。
+5. **`desktopcfg` 内部 `ensureLibraryDir`**：目标目录不存在时创建（含 `~/.safemedia/library` 默认库），否则首次双击必然报错。
+6. **启动参数在 macOS 上不作依赖**（实测偏差，AC2.1）：`open -n -a safemedia.app --args <dir>` 与 `open -a <app> --args <dir>` 都**不把参数送达进程**（新实例的登录页仍显示默认库；另用裸二进制探针复核，argv 为空）。代码保留 argv 支持（仅**终端直接运行二进制**时有效，如 `make desktop-run ARGS=`），但**选库以 `desktop.json` 为准**；README / `docs/manual.md` / `dist` 的 `说明.txt` 中原先承诺的「拖放或 `open --args` 换库」已删除。→ 回流 `AGENTS.md` 易错点 8。
+7. **`.gitignore` 用根锚定 `/dist/`**：写成 `dist/` 会同时忽略 `desktop/frontend/dist/index.html`——它是 `//go:embed` 的**源码引导页**，被忽略则全新 clone 构建出的 `.app` 白屏。
+8. **`ditto -c -k --norsrc`** 而非 `--sequesterRsrc`：后者会在 zip 里写入 `__MACOSX/` 冗余条目。

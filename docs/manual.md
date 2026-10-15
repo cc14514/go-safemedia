@@ -105,9 +105,10 @@ make desktop-run      # 构建并直接运行（调试用）
 
 **看哪个库**（优先级从高到低）：
 
-1. 启动参数：`open -a safemedia.app --args ~/vaults`，或把 `.svid` 文件/目录**拖到 `.app` 图标上**；
-2. 配置 `~/.safemedia/desktop.json`：`{ "library": "/Users/you/vaults" }`；
-3. 默认库 `~/.safemedia/library`（不存在时自动创建）。
+1. 配置文件 `~/.safemedia/desktop.json` 的 `library`（**推荐**，双击即生效）：`{ "library": "/Users/you/vaults" }`
+2. 默认库 `~/.safemedia/library`（不存在时自动创建）。
+
+> 启动参数（`open -a safemedia.app --args ~/vaults`、拖放到图标上）**在 macOS 上不可靠**：经 LaunchServices 启动时参数不会送达进程（实测 macOS 27 下无效）。只在**从终端直接运行二进制**时可用，例如 `make desktop-run ARGS=~/vaults`。
 
 封存视频、新建账户、恢复账户仍走命令行（`safemedia seal` / `safemedia account create`）——桌面版是播放外壳，不含封存与账户管理入口。
 

@@ -65,13 +65,15 @@ make desktop        # -> desktop/build/bin/safemedia.app
 make desktop-run    # 构建并直接运行
 ```
 
-**看哪个库**：双击后默认看 `~/.safemedia/library`；也可以把 `.svid` 文件或一个目录**拖到 `.app` 上**，或在命令行 `open -a safemedia.app --args ~/vaults`。要长期固定某个库，写一份 `~/.safemedia/desktop.json`：
+**看哪个库**：密档库由 `~/.safemedia/desktop.json` 指定（最可靠的方式，双击即可生效）：
 
 ```json
 { "library": "/Users/you/vaults" }
 ```
 
-优先级：启动参数 > `~/.safemedia/desktop.json` > 默认库。封存视频、新建账户、恢复账户仍然用 CLI（`safemedia seal` / `safemedia account create`）。
+不配就用默认库 `~/.safemedia/library`（不存在时自动创建，空库会提示「没有密档」）。要用另一个库改这一行即可，也可以加 `"account"` 指定别的账户文件（默认 `~/.safemedia/keystore.json`）。
+
+> 从源码调试时可以直接带参数启动（`make desktop-run ARGS=~/vaults`）；但**双击启动的 `.app` 不会收到启动参数**（macOS 经 LaunchServices 启动时不送达），所以选库请用上面的配置文件。封存视频、新建账户、恢复账户仍然用 CLI（`safemedia seal` / `safemedia account create`）。
 
 **发布**（维护者）：
 
