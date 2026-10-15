@@ -408,13 +408,20 @@ func postJSON(t *testing.T, url string, body any) (int, string) {
 
 func getString(t *testing.T, url string) string {
 	t.Helper()
+	_, s := getStringStatus(t, url)
+	return s
+}
+
+// getStringStatus 返回状态码与正文（断言状态码时用）。
+func getStringStatus(t *testing.T, url string) (int, string) {
+	t.Helper()
 	resp, err := http.Get(url)
 	if err != nil {
 		t.Fatalf("GET %s 失败: %v", url, err)
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
-	return string(raw)
+	return resp.StatusCode, string(raw)
 }
 
 func getJSON(t *testing.T, url string) map[string]any {

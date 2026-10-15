@@ -235,8 +235,8 @@ func (c *core) handleSeal(w http.ResponseWriter, r *http.Request) {
 
 // handleSealStatus 返回进度 JSON（面板每秒轮询）。
 //
-// 注意：这里**不 touch()** 之外的额外处理——轮询算作活动（用户正开着面板看进度），
-// 但队列运行时空闲锁定本来就会跳过（AC10.9）。
+// 明确**不调用 touch()**：面板的自动刷新不得刷新空闲计时，否则「开着面板」就等于永不解锁
+// （AC10.9 的前半由「队列运行时空闲看门狗跳过」满足，而不是靠轮询续命）。
 func (c *core) handleSealStatus(w http.ResponseWriter, r *http.Request) {
 	writeNoCacheHeaders(w)
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")

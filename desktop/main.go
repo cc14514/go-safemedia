@@ -79,7 +79,11 @@ func (a *App) startup(ctx context.Context) {
 // 投递成功后把窗口切到封存面板；锁定态/不支持时用原生对话框说明原因
 // （而不是让用户看到一个错误页）。
 func (a *App) dropPaths(paths []string) {
-	if a.engine == nil || len(paths) == 0 {
+	if len(paths) == 0 {
+		return
+	}
+	if a.engine == nil {
+		a.alert("没有封存", "引擎未就绪，请重启应用")
 		return
 	}
 	body, _ := json.Marshal(paths)

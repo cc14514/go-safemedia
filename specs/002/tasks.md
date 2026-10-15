@@ -146,6 +146,7 @@
 - [x] T10.5 `internal/seal`：`Collect` + `Run` + `Job`/`Reject`/`Progress`/`ErrExists`；`internal/cli/seal.go` 改为调用（**CLI 输出与退出码逐字不变**，AC10.11）。
 - [x] T10.6 引擎队列与路由：`Options`/`LibraryOptions` 注入 `Sealer`（`internal/play` 只定义接口）；`/drop/<token>`（锁定态 409）、`/seal`（面板）、`/seal/status`（JSON，**不 touch**）、`/seal/output`（复用选择页 `purpose=seal`）；完成后重扫库根（AC10.10）；空闲看门狗在 `Active()` 时跳过、`lock()` 时 `Cancel()`（AC10.9）。
 - [x] T10.7 （测试先行）`internal/play/seal_flow_test.go`：面板与状态 JSON 的字段/文案、锁定态 409（不写盘）、`/seal/status` 不计空闲活动、投递 token 校验、面板随锁定态、锁定中止队列、封存中空闲不触发、完成后重扫。
+- [x] T10.15 （测试先行）**实时进度**：`seal_progress_test.go` 断言队列未结束时 `/seal/status` 就报出 `封存中` + 中间百分比 + 已写/总字节，且面板首屏（服务端渲染）已经带上这份中间进度（AC10.3「不是结束时一次性出现」）。变异验证：让状态只报已结束的条目 → 该用例变红。
 - [x] T10.8 页面：`/seal` 面板模板 + 进度条样式 + 每秒轮询脚本；索引页工具栏加「封存」入口（外观遵守 AC7.9/AC10.12）。
 - [x] T10.9 外壳：`main.go` 开 `EnableFileDrop` + `OnFileDrop` → POST `/drop/<token>`（409 → 原生提示）+ `WindowExecJS` 跳 `/seal`；引擎暴露 `DropURL()`。
 - [x] T10.10 （测试先行）L2 `tests/integration/seal_flow_test.go`：锁定态拖入 0 写盘 → 解锁 → POST `/drop` 文件与目录 → 轮询 `/seal/status` 到完成 → 库根重扫后新密档可播（AC10.1/10.2/10.3/10.10）。
