@@ -61,6 +61,15 @@ tests/e2e/              L3 端到端 + REPORT.md
 4. **keystore/封装测试用 scrypt N=1<<10**（生产 2^17），否则单测慢到不可用。
 5. **写大文件要一个一个来**：见「与模型/网关相关的注意事项」。
 6. **Go 1.25+ 的 `capacity`/多返回值改动**低风险，但 `go vet` 必须过；`gofmt -w` 在每个里程碑前跑。
+7. **`html/template`：`{{template "x" .}}` 里的 `$` 是「本次调用的数据」，不是 `ExecuteTemplate` 的根数据**。递归模板（如目录树）必须显式传上下文（本仓库用 `treeCtx` + `nodeWith`），否则 `$.SomeField` 会解析到子节点上并报 `can't evaluate field`。
+8. **不要 `_ = tmpl.Execute(...)`**：模板执行错误会静默把页面截断成半页（曾导致播放页只渲染到一半、无任何报错）。渲染失败必须可见（`renderError`）。
+
+## 目录树（目录模式）实现要点
+
+- `ScanLibrary` **递归**扫描目录（`filepath.WalkDir`），跳过隐藏项（`.` 开头）、符号链接（避免列出库外密档）、非 `.svid`；`Entry.Rel` 是库内相对路径，`Label` 即它。
+- `buildTree(entries)` 按 `Rel` 拆目录生成 `treeNode`；索引页与播放页侧栏**共用同一棵树与同一套模板**（`treeCSS` + `treeTmpl`）。
+- 树在启动时扫描一次（`Library` 构造时），追加密档后需重跑 `play` 才可见。
+- 播放页：`<aside class="tree">` 常驻左侧（`position:sticky; height:100vh`），`li.file.active` 高亮当前条目并 `scrollIntoView`；≤820px 移到播放器上方；全屏时仅 `<video>` 全屏，目录树自然让出。
 
 ## 与模型/网关相关的注意事项（本机环境）
 
