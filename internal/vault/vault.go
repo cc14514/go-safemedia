@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync"
 )
 
 // SealResult 描述一次封存的结果（供 CLI 打印进度/摘要）。
@@ -162,12 +163,18 @@ func (p *progressReader) Read(b []byte) (int, error) {
 //
 // 不缓存明文块：每次 ReadAt 按需解密涉及的块。明文仅存在于内存与 loopback 响应中。
 type Reader struct {
+	// mu 保护密钥与生命周期状态：ReadAt 持读锁，Close/Wipe 持写锁。
+	// 这样「清零密钥」与「正在解密的请求」不会并发访问同一份密钥
+	// （软锁定/CTRL-C 时服务仍可能有在处理中的响应）。
+	mu      sync.RWMutex
 	f       *os.File
 	header  *Header
 	aead    cipher.AEAD
 	fileKey []byte
-	pos     int64
 	closed  bool
+
+	posMu sync.Mutex // 保护 Read 的顺序位置（ReadAt 不使用）
+	pos   int64
 }
 
 // Open 打开密档并用账户私钥解封文件密钥。私钥不匹配时返回 ErrNotThisAccount。
@@ -234,6 +241,8 @@ func (r *Reader) ContentType() string {
 
 // ReadAt 解密 [off, off+len(p)) 范围（io.ReaderAt）。
 func (r *Reader) ReadAt(p []byte, off int64) (int, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	if r.closed {
 		return 0, os.ErrClosed
 	}
@@ -305,13 +314,20 @@ func (r *Reader) decryptChunk(i uint64, buf []byte) ([]byte, error) {
 
 // Read 顺序读取（io.Reader）。
 func (r *Reader) Read(p []byte) (int, error) {
-	n, err := r.ReadAt(p, r.pos)
+	r.posMu.Lock()
+	off := r.pos
+	r.posMu.Unlock()
+	n, err := r.ReadAt(p, off)
+	r.posMu.Lock()
 	r.pos += int64(n)
+	r.posMu.Unlock()
 	return n, err
 }
 
 // Close 关闭文件并清零内存中的文件密钥。
 func (r *Reader) Close() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if r.closed {
 		return nil
 	}
@@ -324,6 +340,8 @@ func (r *Reader) Close() error {
 
 // Wipe 显式清零文件密钥（锁定/退出时调用；幂等）。
 func (r *Reader) Wipe() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	wipe(r.fileKey)
 	r.fileKey = nil
 	r.aead = nil

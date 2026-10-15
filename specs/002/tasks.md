@@ -1,0 +1,89 @@
+# specs/002 Tasks — 桌面外壳（macOS 首版）
+
+- 上游：`specs/002/spec.md`（已过评审门）· `specs/002/plan.md`（已过评审门）
+- 规则：每个 User Story/里程碑内，**测试子任务排在实现子任务之前**（TDD：RED → GREEN → REFACTOR）。
+- 门禁：每个里程碑结束跑 `make test`；全部完成跑 `make test-l3`。
+- **状态：全部完成**（2026-10-15）。实现与计划的两处用语差异见文末「对齐记录」。
+
+---
+
+## M0 · 前置验证
+
+- [x] **T0.1**（spike）Wails v2.16.0 外壳能否 `location.replace` 到 loopback URL —— 实证通过（marker + UA `wails.io`），见 `docs/adr/0001`。
+- [x] **T0.2**（spike，安全红线前置）真实外壳播放后扫描 webview 数据目录，确认**无明文**——**通过，未改用非持久化数据仓库**。
+  → 证据：可缓存对照响应 1.48MB 被写入 `~/Library/Caches/com.wails.safemedia/WebKit/NetworkCache`（证明检索方法有效），而引擎同款 `no-store` 响应 1.32MB×2 与真实 mp4 媒体 688KB（Range 流）在缓存/临时目录**零残留**。见 `ctx` 记忆 #61。
+
+## M1 · 引擎门控（US1 登录 + US3 软锁定）
+
+### 测试（先写）
+- [x] T1.1 `internal/play/gate_test.go`：`gate` 状态机 —— Locked 下 `GET /` 返回登录页（`<form action="/login">` + `no-store`）。（文件名与计划不同：全部门控用例集中在一个新文件，便于共存）
+- [x] T1.2 同上：`POST /login` 口令正确 → 303 + `Set-Cookie: sv_session=…`（HttpOnly/SameSite=Strict）；口令错误 → 重绘登录页 + 不建会话。
+- [x] T1.3 同上：软锁定后 `Locked()==true`、端口仍存活、内容回到登录页；且**可再次解锁**。
+- [x] T1.4 同上：会话校验 —— 带正确 cookie 200；无/错 cookie 且会话已启用 → 403。
+- [x] T1.5 `internal/play/play_test.go`：预解锁（`Options.Reader`）路径**不要求**会话 cookie（CLI 兼容）。
+- [x] T1.6 `internal/play/gate_test.go`：`loginPage` 渲染含表单与目标描述、错误时含错误文案、模板失败不静默截断。
+- [x] T1.7 `go test -race ./internal/play/...` 通过；**修掉两处真实竞态**（见「对齐记录」）。
+
+### 实现
+- [x] T1.8 `core.go`：三态生命周期（Locked/Unlocked/Closed）+ `unlocked/closed atomic.Bool` + `softLock` + 会话值 + `sessionCookieName`。
+- [x] T1.9 `core.go`：`gate(content)` 门控中间件；`/login` 处理、锁定态媒体路径 403、Closed 410、`/lock` 仅在解锁态可达。
+- [x] T1.10 `core.go`：`lock()` = 清零 + 软锁定/关停；空闲监视在锁定后停止、解锁后重启。
+- [x] T1.11 `play.go`：`Options` 增 `Unlock` 与 `SoftLock`；`reader/name` 用 `RWMutex` 保护，媒体路径读锁。
+- [x] T1.12 `library.go`：`LibraryOptions` 增 `Unlock` 与 `SoftLock`；`Priv` 可空；私钥读写与 `wipe` 用同一 `Mutex` 串行化。
+- [x] T1.13 `page.go`：新增 `loginPage(target, errMsg)` 模板（复用既有风格、中文文案、`renderError` 纪律）。
+
+## M2 · CLI 回归与版本注入（US5、US6）
+
+### 测试（先写）
+- [x] T2.1 `tests/integration/play_cli_test.go`：CLI `play` **端到端输出与退出码不变**，且**不出现登录页**（AC6.2）。CLI 的既有单档/目录/锁定用例全部原样通过。
+- [x] T2.2 `internal/version`：版本号从 CLI 包抽到独立包（CLI 与外壳共用一份），默认 `0.2.0-dev`；`go build -ldflags -X` 注入验证通过（`safemedia version` 显示注入值）。
+- [x] T2.3 CLI 锁定行为不变：CLI 不传 `SoftLock` → 锁定时**关停服务**（既有 L1/L2 用例锁定这一点）。
+
+### 实现
+- [x] T2.4 `internal/cli`：CLI 保持预解锁路径（`Options.Reader` / `LibraryOptions.Priv`），不传 `SoftLock`，行为一字不改（**零改动**即达成）。
+- [x] T2.5 `internal/version/version.go` + `internal/cli/root.go`：`version` 子命令改用 `version.String()`。
+
+## M3 · 桌面外壳（US1/US2/US3 的落地）
+
+### 测试（先写）
+- [x] T3.2 `internal/desktopcfg/target_test.go`：目标解析三级优先级（启动参数 > 配置 > 默认库）单测。
+- [x] T3.3 `internal/desktopcfg/target_test.go`：配置读写三态（缺省/损坏/合法）。
+- [x] T3.9（新增）`tests/integration/desktop_flow_test.go`：**外壳链路的灰盒集成**——锁定态起服务 → GET `/` 得登录页（含 `no-store`）→ 错误口令停在登录页且无会话 → 正确口令 303 + 会话 cookie → 索引页 → 播放页媒体地址 → 无会话访问媒体 403 → 锁定 → 手动锁定后**未解锁取媒体 403 且不 panic** → 关闭。
+
+### 实现
+- [x] T3.4 `desktop/wails.json` + `desktop/frontend/dist/index.html`（引导页，`__BOOT__` JSON 占位，出错时显示中文原因）。
+- [x] T3.5 `desktop/main.go`：锁定态起引擎 → embed 引导页 → `assetserver.Middleware` 注入 URL → `OnShutdown` 调 `Close()`。
+- [x] T3.6 `desktop/main.go`：目标解析 + 解锁闭包（`account.LoadKeystoreWithPassphrase` → `vault.Open` / `Priv`），口令字节 `account.Wipe` 清零。
+- [x] T3.7 登录页显示解析出的目标（库目录/单档名）。
+
+## M4 · 构建与分发（US5）
+
+- [x] T4.1 `Makefile`：`VERSION`（取自 `internal/version`）+ `LDFLAGS` + `desktop` / `desktop-test` / `desktop-run` / `dist` / `release` / `clean`。（未拆 `dist-cli`/`dist-app`：`dist` 依赖 `desktop` 并顺带构建 CLI，少两个入口更不易误用）
+- [x] T4.2 `dist` 产物：`dist/safemedia_$(VERSION)_darwin-arm64.zip` 含 `safemedia.app` 与 `safemedia`（+`说明.txt`）；`unzip -l` 结构校验通过；CLI 与 `.app` 版本注入均验证。
+- [x] T4.3 `README.md` 与 `docs/manual.md`：桌面版安装、首次使用、Gatekeeper `xattr -dr` 说明。
+
+## M5 · L3 端到端（交付门禁）
+
+- [x] T5.1 `tests/e2e/harness_test.go`：报告新增「002 桌面外壳」段（引擎启动态、登录页、媒体 403、缓存扫描结论）。
+- [x] T5.2 该段含 Pre/Post 对比（登录前后、锁定前后、缓存目录扫描）。
+- [x] T5.3 `make test-l3` 生成 `tests/e2e/REPORT.md` 且全 PASS。
+
+## 收尾
+
+- [x] T6.1 `make test`（L1+L2）全绿（含 `-race`）。
+- [x] T6.2 `make vet fmt` 干净。
+- [x] T6.3 `docs/manual.md` 增补桌面版使用与分发。
+- [x] T6.4 回流 `AGENTS.md`（本机环境/结构/分发）与 `specs/002/*`。
+- [x] T6.5 `make dist` 产出可双击运行的 `.app`，供用户试用。
+
+---
+
+## 对齐记录（实现与计划的差异，以实现为准）
+
+1. **参数名 `SoftLock` 而非 `CloseOnLock`**：`play.Options` / `play.LibraryOptions` 用 `SoftLock bool`，语义为「锁定时不关停、回到登录页」。CLI 不传（零值 = 关停，行为不变），外壳传 `true`。两条相反的锁定语义共用一份实现，红线不会出现两份。
+2. **版本号落在 `internal/version` 而非 `internal/cli`**：CLI 与外壳都要用，放在独立包内可被 `desktop/` 直接 import（`desktop/` 不能 import `internal/cli` 而不引入 cobra 与终端依赖）。
+3. **门控测试集中在 `internal/play/gate_test.go`**，未新建 `core_test.go`。
+4. **`-race` 暴露并修复两处真实竞态**（非测试问题）：
+   - `vault.Reader`：锁定/关闭时清零文件密钥与正在进行的解密读取之间无同步 → 在 `Reader` 内加 `sync.RWMutex`（`ReadAt` 持读锁、`Wipe` 持写锁）。
+   - `play.Library`：`wipe()` 清零私钥与媒体请求「锁内取私钥启封」之间无同步 → 统一用 `l.mu` 串行化。
+5. **`desktopcfg` 新增 `EnsureLibrary`**：目标目录不存在时创建（含 `~/.safemedia/library` 默认库），否则首次双击必然报错。

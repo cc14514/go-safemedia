@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>go-safemedia</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { height: 100%; margin: 0; }
+  body { background:#111; color:#e8e8e8; font:15px/1.6 -apple-system,"PingFang SC",sans-serif;
+         display:flex; align-items:center; justify-content:center; padding:24px; box-sizing:border-box; }
+  .card { width:min(100%,640px); background:#181818; border:1px solid #2a2a2a; border-radius:14px; padding:26px 28px; }
+  h1 { font-size:17px; margin:0 0 10px; }
+  p { margin:0; opacity:.75; }
+  pre { margin:14px 0 0; padding:12px; background:#0e0e0e; border:1px solid #2f2f2f; border-radius:8px;
+        white-space:pre-wrap; word-break:break-word; font-size:13px; color:#ffb0b0; }
+  .ver { margin-top:16px; font-size:12px; opacity:.45; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1 id="title">正在启动本机播放服务…</h1>
+  <p id="msg">解密全部在本机 127.0.0.1 环回进行，明文不落盘。</p>
+  <pre id="detail" hidden></pre>
+  <div class="ver" id="ver"></div>
+</div>
+<script>
+// __BOOT__ 由 Go 侧在启动时替换为 JSON（url 或 error）；json 会转义 < > &，故不会提前闭合本脚本。
+(function () {
+  var BOOT = __BOOT__;
+  var el = function (id) { return document.getElementById(id); };
+  el('ver').textContent = BOOT.version || '';
+  if (BOOT.error) {
+    el('title').textContent = '启动失败';
+    el('msg').textContent = '窗口已打开，但本机播放服务未能启动。请按下面的提示处理后重试。';
+    el('detail').hidden = false;
+    el('detail').textContent = BOOT.error;
+    return;
+  }
+  if (BOOT.url) {
+    window.location.replace(BOOT.url);
+    return;
+  }
+  el('title').textContent = '启动失败';
+  el('msg').textContent = '缺少播放服务地址，请重新启动。';
+})();
+</script>
+</body>
+</html>

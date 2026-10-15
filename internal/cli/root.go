@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/cc14514/go-safemedia/internal/account"
+	"github.com/cc14514/go-safemedia/internal/version"
 )
 
 var flagAccountPath string
@@ -71,12 +72,13 @@ func newRootCmd() *cobra.Command {
 	return root
 }
 
+// Version 由 internal/version 统一提供（CLI 与桌面外壳共用同一注入点）。
 func newVersionCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "version",
 		Short: "打印版本信息",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			fmt.Fprintln(cmd.OutOrStdout(), "go-safemedia v0.1.0-dev")
+			fmt.Fprintln(cmd.OutOrStdout(), version.String())
 			return nil
 		},
 	}

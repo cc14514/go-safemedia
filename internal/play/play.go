@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cc14514/go-safemedia/internal/vault"
@@ -13,11 +14,22 @@ import (
 
 // Options 是单密档播放服务的配置。
 type Options struct {
-	Reader      *vault.Reader
-	Name        string        // 展示名（通常为密档文件名）
+	// Reader 是预解锁路径（CLI 与测试）：提供后服务以解锁态启动，不需要登录页。
+	Reader *vault.Reader
+	// Name 是展示名（通常为密档文件名），同时作为登录页的目标描述。
+	Name string
+	// Unlock 是延迟解锁路径（桌面外壳）：服务以锁定态启动，
+	// 登录页提交口令后调用本回调取得 Reader。与 Reader 二选一。
+	// 回调实现方负责在内部使用后清零口令字节，且不得依赖 play 包。
+	Unlock func(password string) (name string, r *vault.Reader, err error)
+
 	IdleTimeout time.Duration // 0 → DefaultIdleTimeout
 	Now         func() time.Time
 	OnLock      func(reason string)
+
+	// SoftLock=true 时锁定时不关停服务，改为回到登录页（桌面外壳）；
+	// 默认 false：锁定即关停（CLI 既有行为，AC8.2）。
+	SoftLock bool
 }
 
 // Server 是单密档播放服务。
@@ -26,30 +38,93 @@ type Server struct {
 	core    *core
 	token   string
 	handler http.Handler
+
+	mu     sync.RWMutex
+	reader *vault.Reader
+	name   string
 }
 
 // New 构造单密档播放服务（未启动）。
 func New(opts Options) (*Server, error) {
-	if opts.Reader == nil {
+	if opts.Reader == nil && opts.Unlock == nil {
 		return nil, fmt.Errorf("播放服务缺少密档读取器")
 	}
 	token, err := newToken()
 	if err != nil {
 		return nil, err
 	}
-	s := &Server{opts: opts, token: token}
-	s.core = newCore(opts.IdleTimeout, opts.Now, opts.OnLock, func() {
-		if opts.Reader != nil {
-			opts.Reader.Wipe()
+	s := &Server{opts: opts, token: token, reader: opts.Reader, name: opts.Name}
+
+	// 锁定态启动（需登录）时启用会话校验；预解锁路径无 cookie 可发，不校验。
+	session := ""
+	if opts.Reader == nil {
+		if session, err = newToken(); err != nil {
+			return nil, err
 		}
+	}
+
+	s.core = newCore(coreConfig{
+		idle:        opts.IdleTimeout,
+		now:         opts.Now,
+		onLock:      opts.OnLock,
+		onLockExtra: s.wipe,
+		softLock:    opts.SoftLock,
+		mediaPrefix: "/media/" + token,
+		target:      opts.Name,
+		unlockFn:    s.doUnlock,
+		session:     session,
+		preUnlocked: opts.Reader != nil,
 	})
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleIndex)
 	mux.HandleFunc("/media/"+token, s.handleMedia)
-	mux.HandleFunc("/lock", handleLockRequest(s.core))
-	s.handler = s.core.wrap(mux)
+	s.handler = s.core.gate(mux)
 	return s, nil
+}
+
+// doUnlock 是门控的解锁回调：调用 Options.Unlock 并接管新 Reader。
+func (s *Server) doUnlock(password string) error {
+	if s.opts.Unlock == nil {
+		return fmt.Errorf("该服务未配置解锁方式")
+	}
+	name, r, err := s.opts.Unlock(password)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	if s.reader != nil {
+		_ = s.reader.Close()
+	}
+	s.reader = r
+	s.name = name
+	s.mu.Unlock()
+	return nil
+}
+
+// wipe 清零当前 Reader 的文件密钥（锁定/关闭时必须调用）。
+func (s *Server) wipe() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.reader != nil {
+		s.reader.Wipe()
+	}
+}
+
+func (s *Server) currentReader() *vault.Reader {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.reader
+}
+
+// displayName 返回展示名（解锁后以解锁回调给出的名字为准）。
+func (s *Server) displayName() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.name != "" {
+		return s.name
+	}
+	return s.opts.Name
 }
 
 // Handler 返回 HTTP 处理器（L1 测试可直接挂到 httptest）。
@@ -75,7 +150,7 @@ func (s *Server) Addr() string {
 // Locked 表示服务是否已锁定（密钥已清零）。
 func (s *Server) Locked() bool { return s.core.locked.Load() }
 
-// Lock 锁定播放：清零文件密钥、关闭服务、通知回调（幂等）。
+// Lock 锁定播放：清零文件密钥（幂等）。SoftLock=false 时同时关停服务。
 func (s *Server) Lock(reason string) { s.core.lock(reason) }
 
 // Close 关闭服务并清零密钥。
@@ -87,27 +162,28 @@ func (s *Server) handleMedia(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "只支持 GET/HEAD", http.StatusMethodNotAllowed)
 		return
 	}
-	if s.core.locked.Load() || s.opts.Reader == nil {
+	vr := s.currentReader()
+	if s.core.locked.Load() || vr == nil {
 		http.Error(w, "播放已锁定", http.StatusGone)
 		return
 	}
 	writeNoCacheHeaders(w)
-	w.Header().Set("Content-Type", s.opts.Reader.ContentType())
+	w.Header().Set("Content-Type", vr.ContentType())
 
 	// 预检：在写出响应头之前先验证请求起点所在的块。
 	// 这样被篡改/损坏的密档会得到明确的 500，而不是一个被中途掐断的 200/206 流
 	// （AC4.4：报完整性错误且不崩溃）。请求范围之外的块仍由 ServeContent 流式读取，
 	// 若其后才遇错，连接会中断——浏览器据此触发 error，播放页随即提示改用 mpv。
-	if !s.probeBeforeServe(r) {
+	if !probeBeforeServe(vr, r) {
 		http.Error(w, "密档损坏或已被篡改：无法解密该位置的块", http.StatusInternalServerError)
 		return
 	}
-	http.ServeContent(w, r, "", time.Time{}, &seeker{r: s.opts.Reader})
+	http.ServeContent(w, r, "", time.Time{}, &seeker{r: vr})
 }
 
 // probeBeforeServe 读取请求起点处的一小段以确认可解密。
-func (s *Server) probeBeforeServe(r *http.Request) bool {
-	size := s.opts.Reader.Size()
+func probeBeforeServe(vr *vault.Reader, r *http.Request) bool {
+	size := vr.Size()
 	if size <= 0 {
 		return true
 	}
@@ -123,7 +199,7 @@ func (s *Server) probeBeforeServe(r *http.Request) bool {
 		n = size - at
 	}
 	buf := make([]byte, n)
-	if _, err := s.opts.Reader.ReadAt(buf, at); err != nil && err != io.EOF {
+	if _, err := vr.ReadAt(buf, at); err != nil && err != io.EOF {
 		return false
 	}
 	return true
@@ -169,12 +245,13 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	writeNoCacheHeaders(w)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
-	fmt.Fprint(w, playerPage(s.opts.Name, s.MediaPath(), "", treeNode{}, ""))
+	fmt.Fprint(w, playerPage(s.displayName(), s.MediaPath(), "", treeNode{}, ""))
 }
 
 // writeNoCacheHeaders 禁止浏览器缓存明文（威胁模型 b）。
+// 门控与媒体响应一律使用（plan.md §5）。
 func writeNoCacheHeaders(w http.ResponseWriter) {
 	w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate, private")
 	w.Header().Set("Pragma", "no-cache")

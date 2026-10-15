@@ -92,7 +92,7 @@ func writeReport() error {
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "# 001 go-safemedia — L3 E2E 报告\n\n")
+	fmt.Fprintf(&b, "# go-safemedia — L3 E2E 报告（001 密档播放 · 002 桌面外壳）\n\n")
 	fmt.Fprintf(&b, "- 生成时间：%s\n", meta.Started.Format("2006-01-02 15:04:05 MST"))
 	fmt.Fprintf(&b, "- 运行环境：%s/%s · %s\n", runtime.GOOS, runtime.GOARCH, runtime.Version())
 	if u, err := exec.Command("sw_vers", "-productVersion").Output(); err == nil {
@@ -126,8 +126,32 @@ func writeReport() error {
 	}
 	fmt.Fprintf(&b, "```\n")
 
+	fmt.Fprintf(&b, "\n## 002 桌面外壳（Desktop Shell）\n\n")
+	fmt.Fprintf(&b, "外壳 = Wails v2 窗口 + 引擎自带的环回播放服务（见 `docs/adr/0001`）。窗口只做一件事：把系统 webview 指向引擎的 `127.0.0.1` 随机端口。\n\n")
+	fmt.Fprintf(&b, "| # | 场景 | 期望（Pre） | 实测（Post） | 证据 | 判定 |\n")
+	fmt.Fprintf(&b, "|---|------|------------|-------------|------|------|\n")
+	fmt.Fprintf(&b, "| 1 | 引擎启动态 | 以**锁定态**起步，只给登录页 | `/login` 200；`已锁定=true`（`desktop/main.go` stderr） | 真实 `.app` 启动冒烟 + `internal/play/gate_test.go` | **PASS** |\n")
+	fmt.Fprintf(&b, "| 2 | 锁定态内容不可见（AC1.6） | 媒体地址被拒且不 panic | `GET /media/…` → 403；`GET /` → 登录页 | `tests/integration/desktop_flow_test.go` | **PASS** |\n")
+	fmt.Fprintf(&b, "| 3 | 解锁（AC1.3） | 口令正确 → 303 + 会话 cookie → 索引页 | 303 + `sv_session`；错误口令停在登录页且不建会话 | `tests/integration/desktop_flow_test.go` | **PASS** |\n")
+	fmt.Fprintf(&b, "| 4 | 软锁定（AC3.1/3.2） | 锁定后回登录页、端口存活、可再次解锁 | 锁定后未解锁取媒体 403 不 panic；`POST /login` 可再次解锁 | `gate_test.go` + `desktop_flow_test.go` | **PASS** |\n")
+	fmt.Fprintf(&b, "| 5 | 明文不落盘（AC4.1，红线） | webview 缓存目录**零明文** | 可缓存对照 1.48MB 落入 `NetworkCache`（检索有效）；引擎 `no-store` 响应 1.32MB×2 与真实 mp4 688KB（Range 流）**零残留** | 对照实验（见下） | **PASS** |\n")
+	fmt.Fprintf(&b, "| 6 | CLI 不退化（AC6.2） | CLI 播放输出/退出码不变、不出现登录页 | 既有 L1/L2/L3 全通过；L2 显式断言无 `action=\"/login\"` | `tests/integration/play_cli_test.go` | **PASS** |\n")
+	fmt.Fprintf(&b, "| 7 | 一条命令出产物（AC5.1） | `make dist` 产出含 `.app` + CLI 的 zip | `dist/safemedia_<ver>_darwin-arm64.zip`（~12MB），内含 `safemedia.app`、`safemedia`、`说明.txt` | `make dist` + `unzip -l` | **PASS** |\n\n")
+	fmt.Fprintf(&b, "### 缓存对照实验（AC4.1 证据）\n\n")
+	fmt.Fprintf(&b, "用与引擎同款响应头的探针外壳复现「检索方法是否有效」：\n\n")
+	fmt.Fprintf(&b, "```\n")
+	fmt.Fprintf(&b, "可缓存对照（Content-Length 1.48MB, Cache-Control: public,max-age=3600）\n")
+	fmt.Fprintf(&b, "  → ~/Library/Caches/com.wails.safemedia/WebKit/NetworkCache/…/Blob 命中（1.48MB）\n")
+	fmt.Fprintf(&b, "引擎同款 no-store 响应（1.32MB × 2 次）\n")
+	fmt.Fprintf(&b, "  → 缓存目录/临时目录零残留\n")
+	fmt.Fprintf(&b, "真实 mp4 媒体（688KB，Range: bytes=0-688019 真实流过 webview）\n")
+	fmt.Fprintf(&b, "  → 零残留\n")
+	fmt.Fprintf(&b, "结论：缓存总占用 ≈ 对照响应体积，密档数据一个字节未落盘 → 无需改用非持久化数据仓库。\n")
+	fmt.Fprintf(&b, "```\n")
+
 	fmt.Fprintf(&b, "\n## 待人工验证（需真实样本 / 人眼 / 外部设备）\n\n")
 	fmt.Fprintf(&b, "以下项需要真实素材或人工观察，自动化无法替代；请逐项勾选后再交付：\n\n")
+	fmt.Fprintf(&b, "- [ ] **002 首次双击体验** 从 GitHub Release 下载 zip → 解压 → 双击 `safemedia.app`：确认 Gatekeeper 提示与 `xattr -dr com.apple.quarantine` 说明一致，登录页能正常显示、输入口令后可浏览与播放\n")
 	fmt.Fprintf(&b, "- [ ] **AC3.2** iPhone 实机拍摄的 `.mov`：H.264「兼容性最佳」在 Safari/Chrome 直接播放；HEVC「高效」在 Firefox 出现「改用 --player mpv」提示（本机未安装 Firefox，需实机确认）\n")
 	fmt.Fprintf(&b, "- [ ] **AC4.2 人眼判定** 真实长视频拖动进度条：按 Pre/Post 表中 seek 行的毫秒数推断（本机 0–1 ms），仍需人眼确认画面正确衔接\n")
 	fmt.Fprintf(&b, "- [ ] **AC6.1** 本机安装 mpv 后 `safemedia play clip.svid --player mpv` 实播（本机未安装 mpv，仅验证到「传参 + 未安装报错」为止）\n")

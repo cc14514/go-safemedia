@@ -68,12 +68,21 @@
 - FR-5.1 账户文件 + 密档拷贝到任何装有 safemedia 的机器，输入登录密码即可离线播放，全程无网络依赖。
 - FR-5.2 恢复口令与登录密码独立，泄露其一不影响另一个。
 
+### FR-6 桌面外壳
+
+- FR-6.1 双击 `safemedia.app` 即打开一个系统 webview 窗口，登录后直接播放密档或浏览密档库；全程不出现终端。
+- FR-6.2 复用既有播放服务与目录树 UI：外壳不重复实现封存、启封与登录校验。
+- FR-6.3 登录在窗口内的登录页完成（仅 `127.0.0.1`）：播放服务以锁定态启动，提交账户口令后解锁并进入索引页；锁定后回到该页。
+- FR-6.4 红线不因外壳而放宽：明文不落盘（外壳须禁用 webview 磁盘缓存）、只绑环回、空闲锁定、退出即清密钥。
+- FR-6.5 首版仅 macOS arm64、不签名不公证，经 GitHub Release 分发（zip 内含 `.app` 与 CLI）。
+
 ## 5. 非目标
 
 - DRM、防录屏、防转发。
 - 多用户授权（格式预留，不实现）。
 - 转码；mov→mp4 转封装留二期。
-- GUI、云端服务、移动端 App。
+- 云端服务、移动端 App。
+- Windows 桌面外壳（首版不做：cgo 外壳无法从 macOS 交叉编译，见 `docs/adr/0001`）。
 
 ## 6. CLI 草案
 
@@ -100,5 +109,6 @@ safemedia play <vault.svid|dir> [--player mpv] [--account <path>]
 
 ## 8. 开放问题
 
+- 桌面外壳是否需保留 `--player mpv` 逃生通道？（WKWebView 即 Safari 引擎，已覆盖白名单内全部容器含 HEVC，GUI 里价值待定。）
 - 仓库改名 go-safe-dir → go-safemedia 由用户执行；module 路径随之确定。
 - `.specify/memory/constitution.md` 尚不存在，plan 阶段是否补建按 SDD 全局规则执行。

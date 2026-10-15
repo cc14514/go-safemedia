@@ -1,0 +1,18 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "safemedia",
+  "outputfilename": "safemedia",
+  "frontend:install": "",
+  "frontend:build": "",
+  "frontend:dev:watcher": "",
+  "frontend:dev:serverUrl": "",
+  "author": {
+    "name": "cc14514",
+    "email": ""
+  },
+  "info": {
+    "productName": "go-safemedia",
+    "productVersion": "0.2.0",
+    "comments": "离线加密视频密档的桌面播放外壳（复用本机环回引擎）"
+  }
+}

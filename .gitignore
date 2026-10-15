@@ -28,3 +28,7 @@ bin/
 # --- 工具链状态（非项目源） ---
 .cortexkit/
 .omo/
+# --- 分发产物与桌面外壳构建输出（Wails 生成；源码只有 main.go / wails.json / frontend/dist/index.html） ---
+/dist/
+desktop/build/
+desktop/frontend/wailsjs/

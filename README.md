@@ -7,6 +7,7 @@
 - 账户复用以太坊账户格式：BIP-39 助记词 → BIP-44 `m/44'/60'/0'/0/0` → secp256k1 → 标准 keystore v3（可用 MetaMask 等钱包打开验证）。
 - 密档 `.svid` = 156 字节定长头部 + 4 MiB 分块 AES-256-GCM（每块独立随机 nonce，可随机访问，**拖进度条不需要从头解密**）。
 - 播放走 `127.0.0.1` 环回 HTTP 流给系统浏览器 `<video>`；装了 mpv 可用 `--player mpv` 作全格式逃生通道。
+- 另有一个**桌面版外壳**（macOS 首版）：一个窗口 + 系统 webview，内部复用同一套环回播放页面，双击即用，不需要终端。
 
 ## 威胁模型（说清楚什么防、什么不防）
 
@@ -19,7 +20,7 @@
 ## 安装与构建
 
 ```sh
-go build -o bin/safemedia ./cmd/safemedia     # 需要 Go 1.25+
+go build -o bin/safemedia ./cmd/safemedia     # 需要 Go 1.26+（见 go.mod）
 # 或
 make build
 ```
@@ -40,6 +41,43 @@ safemedia seal ~/Movies -o ~/vaults                          # 整个目录（�
 safemedia play ~/vaults/clip.svid
 safemedia play ~/vaults/                  # 目录索引（递归子目录，按目录树展示），点选播放
 safemedia play ~/vaults/clip.svid --player mpv      # 交给 mpv（HEVC 等）
+```
+
+## 桌面版（macOS，首版）
+
+不想开终端就用桌面版：一个原生窗口套系统 webview，内部仍是同一个环回引擎，播放页与目录树完全一致（首次进入是登录页，输入账户口令后即可浏览与播放；空闲 30 分钟自动回到登录页）。
+
+**从 Release 安装**（推荐）：
+
+1. 下载 `safemedia_<版本>_darwin-arm64.zip` 并解压；
+2. 首次双击 `safemedia.app` 若被 Gatekeeper 拦住（未签名/未公证），执行一次：
+
+   ```sh
+   xattr -dr com.apple.quarantine /path/to/safemedia.app
+   ```
+
+   然后重新双击即可。（首版不做签名与公证，仅 Apple Silicon；Intel 需自行从源码构建。）
+
+**从源码构建**（需要 `wails` CLI 与 Xcode 命令行工具，不需要 Node）：
+
+```sh
+make desktop        # -> desktop/build/bin/safemedia.app
+make desktop-run    # 构建并直接运行
+```
+
+**看哪个库**：双击后默认看 `~/.safemedia/library`；也可以把 `.svid` 文件或一个目录**拖到 `.app` 上**，或在命令行 `open -a safemedia.app --args ~/vaults`。要长期固定某个库，写一份 `~/.safemedia/desktop.json`：
+
+```json
+{ "library": "/Users/you/vaults" }
+```
+
+优先级：启动参数 > `~/.safemedia/desktop.json` > 默认库。封存视频、新建账户、恢复账户仍然用 CLI（`safemedia seal` / `safemedia account create`）。
+
+**发布**（维护者）：
+
+```sh
+make dist VERSION=0.2.0      # -> dist/safemedia_0.2.0_darwin-arm64.zip（.app + CLI）
+make release VERSION=0.2.0   # 上传到 GitHub Release（需 gh 已登录）
 ```
 
 ## 账户与恢复（两条独立路径）
@@ -85,7 +123,7 @@ SAFEMEDIA_E2E_SAMPLES=/tmp/safemedia-samples make test-l3
 
 ## 术语
 
-密档（Vault）/ 封存（Seal）/ 启封（Unseal）/ 账户（Account）/ 助记词（Mnemonic）——详见 [`CONTEXT.md`](CONTEXT.md)。
+密档（Vault）/ 封存（Seal）/ 启封（Unseal）/ 账户（Account）/ 助记词（Mnemonic）/ 引擎（Engine）/ 桌面外壳（Desktop Shell）——详见 [`CONTEXT.md`](CONTEXT.md)。
 
 ## 许可
 

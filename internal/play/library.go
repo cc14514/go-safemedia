@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cc14514/go-safemedia/internal/vault"
@@ -96,14 +97,24 @@ func sortNode(n *treeNode) {
 
 // LibraryOptions 是目录模式播放服务的配置。
 //
-// 目录模式按需启封：每次媒体请求才用 Priv 解出该密档的文件密钥，
-// 响应结束立即 Close 清零。锁定/关闭时 Priv 也会被尽力清零。
+// 目录模式按需启封：每次媒体请求才用私钥解出该密档的文件密钥，
+// 响应结束立即 Close 清零。锁定/关闭时私钥也会被尽力清零。
 type LibraryOptions struct {
-	Priv        *ecdsa.PrivateKey
+	// Priv 是预解锁路径（CLI 与测试）：提供后服务以解锁态启动，不需要登录页。
+	Priv *ecdsa.PrivateKey
+	// Unlock 是延迟解锁路径（桌面外壳）：服务以锁定态启动，登录页提交口令后
+	// 调用本回调取得私钥。与 Priv 二选一；回调实现方须在使用后清零口令字节。
+	Unlock func(password string) (*ecdsa.PrivateKey, error)
+
 	Entries     []Entry
+	Target      string // 登录页展示的库路径
 	IdleTimeout time.Duration
 	Now         func() time.Time
 	OnLock      func(reason string)
+
+	// SoftLock=true 时锁定时不关停服务，改为回到登录页（桌面外壳）；
+	// 默认 false：锁定即关停（CLI 既有行为）。
+	SoftLock bool
 }
 
 // Library 是目录（多密档）播放服务。
@@ -115,6 +126,9 @@ type Library struct {
 	order   []Entry
 	tree    treeNode
 	handler http.Handler
+
+	mu   sync.RWMutex
+	priv *ecdsa.PrivateKey
 }
 
 // ScanLibrary 递归扫描目录下的 .svid（AC5.4），返回按相对路径排序的条目。
@@ -177,21 +191,38 @@ func ScanLibrary(dir string) ([]Entry, error) {
 
 // NewLibrary 构造目录播放服务（未启动）。允许空列表（AC5.2 显示空列表提示）。
 func NewLibrary(opts LibraryOptions) (*Library, error) {
-	if opts.Priv == nil {
+	if opts.Priv == nil && opts.Unlock == nil {
 		return nil, errors.New("目录播放需要账户私钥用于按需启封")
 	}
 	token, err := newToken()
 	if err != nil {
 		return nil, err
 	}
-	priv := opts.Priv
 	l := &Library{
 		opts:  opts,
-		core:  newCore(opts.IdleTimeout, opts.Now, opts.OnLock, func() { wipePrivateKey(priv) }),
+		priv:  opts.Priv,
 		token: token,
 		byID:  make(map[string]Entry, len(opts.Entries)),
 		order: make([]Entry, 0, len(opts.Entries)),
 	}
+	session := ""
+	if opts.Priv == nil {
+		if session, err = newToken(); err != nil {
+			return nil, err
+		}
+	}
+	l.core = newCore(coreConfig{
+		idle:        opts.IdleTimeout,
+		now:         opts.Now,
+		onLock:      opts.OnLock,
+		onLockExtra: l.wipe,
+		softLock:    opts.SoftLock,
+		mediaPrefix: "/media/" + token + "/",
+		target:      opts.Target,
+		unlockFn:    l.doUnlock,
+		session:     session,
+		preUnlocked: opts.Priv != nil,
+	})
 	for _, e := range opts.Entries {
 		raw := make([]byte, 8)
 		if _, err := rand.Read(raw); err != nil {
@@ -208,8 +239,33 @@ func NewLibrary(opts LibraryOptions) (*Library, error) {
 	mux.HandleFunc("/watch/", l.handleWatch)
 	mux.HandleFunc("/media/"+l.token+"/", l.handleMedia)
 	mux.HandleFunc("/lock", handleLockRequest(l.core))
-	l.handler = l.core.wrap(mux)
+	l.handler = l.core.gate(mux)
 	return l, nil
+}
+
+// doUnlock 是门控的解锁回调：调用 Options.Unlock 并接管新私钥。
+func (l *Library) doUnlock(password string) error {
+	if l.opts.Unlock == nil {
+		return errors.New("该服务未配置解锁方式")
+	}
+	priv, err := l.opts.Unlock(password)
+	if err != nil {
+		return err
+	}
+	if priv == nil {
+		return errors.New("解锁失败：未取得账户私钥")
+	}
+	l.mu.Lock()
+	l.priv = priv
+	l.mu.Unlock()
+	return nil
+}
+
+// wipe 尽力清零当前私钥（锁定/关闭时必须调用）。
+func (l *Library) wipe() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	wipePrivateKey(l.priv)
 }
 
 // Handler 返回 HTTP 处理器。
@@ -246,8 +302,8 @@ func (l *Library) handleIndex(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	writeNoCacheHeaders(w)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
 	fmt.Fprint(w, indexPage(l.tree))
 }
 
@@ -258,8 +314,8 @@ func (l *Library) handleWatch(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	writeNoCacheHeaders(w)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
 	// 播放页左侧常驻目录树（AC5.5），当前条目高亮。
 	fmt.Fprint(w, playerPage(e.Name, "/media/"+l.token+"/"+e.id, "/", l.tree, "/watch/"+e.id))
 }
@@ -282,7 +338,16 @@ func (l *Library) handleMedia(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 按需启封：只在本次响应期间持有该密档的文件密钥。
-	vr, err := vault.Open(e.Path, l.opts.Priv)
+	// 持读锁取私钥并启封，避免与 wipe（写锁）并发访问同一把私钥。
+	l.mu.RLock()
+	priv := l.priv
+	if priv == nil {
+		l.mu.RUnlock()
+		http.Error(w, "未解锁：请先在登录页输入口令", http.StatusForbidden)
+		return
+	}
+	vr, err := vault.Open(e.Path, priv)
+	l.mu.RUnlock()
 	if err != nil {
 		switch {
 		case errors.Is(err, vault.ErrNotThisAccount):

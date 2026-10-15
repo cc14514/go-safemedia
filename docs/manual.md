@@ -57,7 +57,7 @@
 
 ### 从源码构建（推荐）
 
-需要 **Go 1.25 或更高版本**。
+需要 **Go 1.26 或更高版本**（以 `go.mod` 为准）。
 
 ```sh
 git clone https://github.com/cc14514/go-safemedia.git
@@ -76,9 +76,42 @@ mkdir -p ~/bin && cp bin/safemedia ~/bin/ && echo 'export PATH="$HOME/bin:$PATH"
 验证：
 
 ```sh
-safemedia version     # → go-safemedia v0.1.0-dev
+safemedia version     # → go-safemedia 0.2.0-dev（发布包会显示注入的版本号，如 v0.2.0）
 safemedia --help
 ```
+
+### 桌面版（macOS，首版）
+
+不想开终端就用桌面版：一个原生窗口套系统 webview，内部是**同一个环回引擎**，目录树与播放页与浏览器模式完全一致。首版仅支持 **macOS / Apple Silicon**，**不做签名与公证**。
+
+**从 Release 安装**：
+
+```sh
+# 1) 下载 safemedia_<版本>_darwin-arm64.zip 并解压（内含 safemedia.app 与 CLI）
+# 2) 首次被 Gatekeeper 拦住时，执行一次（未签名分发的正常现象）：
+xattr -dr com.apple.quarantine /Applications/safemedia.app
+# 3) 双击 safemedia.app
+```
+
+**从源码构建**（需要 `wails` CLI 与 Xcode 命令行工具，**不需要 Node**）：
+
+```sh
+go install github.com/wailsapp/wails/v2/cmd/wails@v2.16.0
+make desktop          # 产物：desktop/build/bin/safemedia.app
+make desktop-run      # 构建并直接运行（调试用）
+```
+
+**用法**：启动后先是**登录页**（服务以锁定态起步，不存在任何自动解锁路径），输入账户口令后进入目录索引页，点选即播。空闲 30 分钟自动回到登录页（服务不退出），在登录页输入口令可再次解锁；⌘Q 退出。
+
+**看哪个库**（优先级从高到低）：
+
+1. 启动参数：`open -a safemedia.app --args ~/vaults`，或把 `.svid` 文件/目录**拖到 `.app` 图标上**；
+2. 配置 `~/.safemedia/desktop.json`：`{ "library": "/Users/you/vaults" }`；
+3. 默认库 `~/.safemedia/library`（不存在时自动创建）。
+
+封存视频、新建账户、恢复账户仍走命令行（`safemedia seal` / `safemedia account create`）——桌面版是播放外壳，不含封存与账户管理入口。
+
+**明文不落盘在桌面版同样成立**：明文只经 `127.0.0.1` 环回、响应头一律 `no-store`，系统 webview 的缓存目录不留任何明文（对照实验见 `tests/e2e/REPORT.md` 的「002 桌面外壳」段）。
 
 ### 运行时依赖
 
@@ -127,6 +160,9 @@ safemedia play ~/Vaults/clip.mp4.svid
 | **分块** | 密档按 4 MiB 独立加密，所以能精确跳转到任意位置（拖进度条） |
 | **文件密钥** | 每个密档一把随机密钥，用你的账户公钥封装，只有你的私钥能解出 |
 | **密档库 / 目录树** | 一个目录（含各级子目录）中的密档合集；`play <目录>` 时按目录树展示，播放页左侧常驻、可随时切换片源 |
+| **引擎（Engine）** | 核心加解密与播放服务（`internal/…`）：封存、启封、环回播放、目录树、空闲锁定 |
+| **桌面外壳（Desktop Shell）** | 承载引擎的桌面窗口（Wails；`desktop/`）：只把系统 webview 指向引擎的环回地址，不含自己的界面逻辑 |
+| **登录页（Login Page）** | 桌面外壳的入口页：服务以锁定态起步，输入口令后解锁进入目录树；空闲锁定后回到此页 |
 
 > 本工具用「封存/启封」而不是「加密/解密」，用「密档」而不是「加密文件」——**不存在**「转换」「转码」这些动作，视频流原样保留。
 

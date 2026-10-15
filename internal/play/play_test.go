@@ -194,7 +194,7 @@ func TestIdleTimeoutLocksAndWipes(t *testing.T) {
 	var mu sync.Mutex
 	var reasons []string
 	var now = time.Now()
-	clock := func() time.Time { return now }
+	clock := func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
 	setNow := func(d time.Duration) {
 		mu.Lock()
 		now = now.Add(d)

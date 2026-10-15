@@ -102,6 +102,13 @@ func TestM3PlayServesRangeAndLocks(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("播放页状态码 = %d", resp.StatusCode)
 	}
+	// AC6.2：CLI 走预解锁路径，行为与改动前一致——直接给播放页，绝不出现登录页。
+	if strings.Contains(string(page), `action="/login"`) {
+		t.Fatalf("CLI play 不应出现登录页（AC6.2）:\n%s", page)
+	}
+	if !strings.Contains(string(page), "<video") {
+		t.Fatalf("CLI play 播放页缺少 <video>（AC6.2）:\n%s", page)
+	}
 	m := regexp.MustCompile(`src="(/media/[0-9a-f]+)"`).FindStringSubmatch(string(page))
 	if m == nil {
 		t.Fatalf("播放页没有媒体地址:\n%s", page)
