@@ -86,10 +86,12 @@ func New(opts Options) (*Server, error) {
 		unlockFn:    s.doUnlock,
 		session:     session,
 		preUnlocked: opts.Reader != nil,
+		dropToken:   randomToken(), // 单密档模式不注入 Sealer → /drop 返回 409
 	})
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleIndex)
+	mux.HandleFunc("/drop/", s.core.handleDrop)
 	mux.HandleFunc("/media/"+token, s.handleMedia)
 	s.handler = s.core.gate(mux)
 	return s, nil

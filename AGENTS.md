@@ -40,11 +40,12 @@ SAFEMEDIA_E2E_NO_BROWSER=1 make test-l3      # 无 Chrome 时跳过真实解码�
 cmd/safemedia/       入口（只调 cli.Execute()）
 internal/account/    BIP-39/44 派生、keystore v3、口令强度
 internal/vault/      format.go 头部布局 / wrap.go 文件密钥封装 / vault.go Seal+Open+ReadAt / whitelist.go 容器嗅探
-internal/play/       core.go 单文件与目录共用的生命周期 / play.go 单文件 / library.go 目录模式 / accounts.go 账户列表 / page.go 模板
+internal/play/       core.go 单文件与目录共用的生命周期 / play.go 单文件 / library.go 目录模式 / accounts.go 账户列表 / accounts_admin.go 账户管理页 / seal.go 封存队列与面板 / page.go 模板
+internal/seal/       collect.go 输入展开（CLI 与页面共用）/ queue.go 顺序封存队列（进度、取消、不覆盖）
 internal/cli/        cobra 命令（中文输出）、prompt.go 交互、exit.go 退出码
 internal/version/    构建时注入的版本号（CLI 与外壳共用，见 Makefile 的 LDFLAGS）
 internal/desktopcfg/ 外壳的目标解析（启动参数 > desktop.json > 默认库）、账户发现（accounts.go）与配置读写
-desktop/             Wails v2 外壳：main.go（接线）+ frontend/dist/index.html（引导页）+ wails.json
+desktop/             Wails v2 外壳：main.go（接线 + 原生拖放）、sealer.go（封存队列工厂）+ frontend/dist/index.html（引导页）+ wails.json
 tests/integration/   L2 黑盒/灰盒（进程内执行 CLI；desktop_flow_test.go 覆盖外壳链路）
 tests/e2e/           L3 端到端 + REPORT.md + fetch-samples.sh
 ```
@@ -99,6 +100,8 @@ tests/e2e/           L3 端到端 + REPORT.md + fetch-samples.sh
 - **多账户（US8）**：登录页有原生 `<select>`；账户列表由外壳发现后**注入**引擎（`Options.Accounts`/`LibraryOptions.Accounts`），引擎自身不遍历文件系统。`Unlock` 回调签名是 `func(accountID, password string)`；列表非空时 `account` 必须在列表内，否则在**调用回调之前**拒绝（AC8.4）。`internal/play` 的账户列表模块是 `accounts.go`，发现逻辑在 `internal/desktopcfg/accounts.go`，只读 keystore 公开地址在 `internal/account/address.go`。
 - **页面不放说明性文案（AC8.6）**：登录页/索引页/播放页只留功能性信息（库根、数量、文件名与大小、错误原因）。红线说明留在 CLI 输出与文档里，别往页面上加「明文不落盘」「绝不导入…」这类段落——`page_style_test.go` 会判红（唯一例外：创建页与恢复页的「红线」提示，AC9.5，`TestRedlineNoticeOnlyWhereSecretsEnter` 钉住它只能出现在这两页——它们是用户交出/拿到助记词的地方，恢复页尤其可能被用来导入别人的钱包助记词；CLI 的 `account create` / `account recover` 同样先打印）。
 - **账户管理在页面里做（US9）**：登录页 → `/accounts`（创建 / 恢复 / 删除），路由 `core.handleAccounts` 在 `gate` 里**只在锁定态**放行（解锁后 303 回索引页，`accounts_admin_page_test.go` 的 T9.1 钉住）。引擎侧接口是 `Options.AccountsAdmin`（`internal/play` 只定义接口），实现与落盘在 `internal/desktopcfg`（`accountAdmin`/`NewAccountAdmin`），账户文件发现也在那里。
+- **图形化封存（US10）**：Wails 原生拖放（`options.DragAndDrop{EnableFileDrop:true}` + `runtime.OnFileDrop` → 绝对路径，**不经 DOM/webview**）→ 外壳 `App.dropPaths` POST 引擎的**令牌地址** `/drop/<token>`（token 只在外壳进程内存里、从不渲染进页面；同 `/media/<token>` 款）→ 引擎队列（`internal/seal`，`Options.Sealer`/`LibraryOptions.Sealer` 注入，`internal/play` 只定义接口 `SealFactory`/`SealQueue`）→ `runtime.WindowExecJS` 跳 `/seal` 面板；`/seal/status` 每秒轮询出实时进度，**它不调 `touch()`**（自动刷新不得刷掉空闲锁定）。失败/锁定态用原生对话框说明原因（Apache 409/403）。**封存中空闲看门狗跳过判定**（`SealQueue.Active()`），显式 `lock()` 会 `Cancel()` 队列；队列结束后重扫库根（AC10.10）。输入展开逻辑 CLI 与页面**共用 `internal/seal.Collect`**（CLI 输出与退出码逐字不变）。
+- **封存不覆盖已存在的密档**：`vault.SealOptions{Overwrite:false}` 用 `O_EXCL` 在写第一个字节之前判定（`ErrTargetExists`）；CLI 仍走 `SealFileWithProgress`（默认覆盖，语义不变）。取消/失败清理半成品（其中不含明文）。
 - **创建账户的助记词只出现一次**：`Create` 生成账户 → 助记词只在内存 challenge 里（`putChallenge`）→ 复述抽查通过后才 `ConfirmCreate` 写盘；助记词**从不预写盘**（cli 也是这个顺序），`CancelCreate` 丢弃。抽查失败可重抄，口令与助记词不回显到页面。账户管理页响应头同样 `no-store`，webview 不留缓存。
 - **库根在页面里可换**（US7）：索引页 → `/library` 目录选择页（逐级浏览 + 每目录直含密档数）→ `POST /library` → `SetRoot` 规范路径、重扫、原子替换 root/tree/byID/order（`id` 重新分配）→ 回调 `LibraryOptions.OnLibraryChange`（外壳写 `desktop.json` 并保留 account 字段；CLI 不传该回调，选择只对本次会话有效）。非法路径**不改动任何状态**、在页面内显示中文原因；`~` 会展开、相对路径规范为绝对路径。锁定态一律回登录页（不枚举本机目录）。
 - 分发：`make desktop` → `make dist`（`.app` + CLI 打成 zip）→ `make release`（`gh`）。首版仅 macOS/arm64、不签名不公证；arm64 上 Go 自动 ad-hoc 签名，用户只需 `xattr -dr com.apple.quarantine`。

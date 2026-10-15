@@ -12,6 +12,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"embed"
@@ -26,6 +27,7 @@ import (
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+	"github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"github.com/cc14514/go-safemedia/internal/account"
 	"github.com/cc14514/go-safemedia/internal/desktopcfg"
@@ -53,6 +55,8 @@ type engine interface {
 	Start() (string, error)
 	Locked() bool
 	Close() error
+	// DropURL 是拖放投递地址（US10）：外壳把原生拖放的路径 POST 到这里。
+	DropURL() string
 }
 
 // App 是暴露给 Wails 的最小宿主对象；窗口关闭时负责清零密钥。
@@ -61,7 +65,69 @@ type App struct {
 	engine engine
 }
 
-func (a *App) startup(ctx context.Context) { a.ctx = ctx }
+func (a *App) startup(ctx context.Context) {
+	a.ctx = ctx
+	// 原生拖放：窗口里丢进视频/文件夹即交给引擎封存（US10.6）。
+	// 必须在窗口就绪后注册；回调里只做 HTTP 投递，不阻塞 UI 线程。
+	runtime.OnFileDrop(ctx, func(_, _ int, paths []string) {
+		go a.dropPaths(paths)
+	})
+}
+
+// dropPaths 把拖入的绝对路径投递给引擎的随机投递地址（AC10.6/AC10.7）。
+//
+// 投递成功后把窗口切到封存面板；锁定态/不支持时用原生对话框说明原因
+// （而不是让用户看到一个错误页）。
+func (a *App) dropPaths(paths []string) {
+	if a.engine == nil || len(paths) == 0 {
+		return
+	}
+	body, _ := json.Marshal(paths)
+	req, err := http.NewRequest(http.MethodPost, a.engine.DropURL(), bytes.NewReader(body))
+	if err != nil {
+		a.alert("无法投递拖入的文件", err.Error())
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		a.alert("无法投递拖入的文件", err.Error())
+		return
+	}
+	defer resp.Body.Close()
+
+	switch resp.StatusCode {
+	case http.StatusOK:
+		// 切到封存面板；无窗口上下文（测试）时跳过。
+		if a.ctx != nil {
+			runtime.WindowExecJS(a.ctx, "window.location.replace('/seal')")
+		}
+	case http.StatusConflict, http.StatusForbidden, http.StatusBadRequest:
+		var e struct {
+			Error string `json:"error"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&e)
+		if e.Error == "" {
+			e.Error = resp.Status
+		}
+		a.alert("没有封存", e.Error)
+	default:
+		a.alert("没有封存", resp.Status)
+	}
+}
+
+// alert 弹一个原生对话框（拖放失败路径；页面内不显示技术细节）。
+func (a *App) alert(title, msg string) {
+	if a.ctx == nil {
+		fmt.Fprintf(os.Stderr, "[safemedia] %s: %s\n", title, msg)
+		return
+	}
+	_, _ = runtime.MessageDialog(a.ctx, runtime.MessageDialogOptions{
+		Type:    runtime.ErrorDialog,
+		Title:   title,
+		Message: msg,
+	})
+}
 
 // shutdown 由 Wails 在窗口关闭/退出时调用（AC3.3）。
 func (a *App) shutdown(context.Context) {
@@ -108,7 +174,12 @@ func main() {
 		BackgroundColour: &options.RGBA{R: 17, G: 17, B: 17, A: 1},
 		OnStartup:        app.startup,
 		OnShutdown:       app.shutdown,
-		Bind:             []interface{}{app},
+		DragAndDrop: &options.DragAndDrop{
+			// 原生拖放：拿到的路径交给引擎封存（US10）。
+			// webview 自身的 HTML5 拖放保持启用，两者互不冲突。
+			EnableFileDrop: true,
+		},
+		Bind: []interface{}{app},
 	}); err != nil {
 		app.shutdown(context.Background())
 		fmt.Fprintln(os.Stderr, "桌面外壳启动失败:", err)
@@ -181,7 +252,8 @@ func buildEngine(target desktopcfg.Target, home string, cfg desktopcfg.Config) (
 		Accounts:      func() []play.AccountOption { return playAccounts(home, cfg) },
 		AccountsAdmin: accountAdmin{home: home, cfg: cfg, inner: admin},
 		IdleTimeout:   play.DefaultIdleTimeout,
-		SoftLock:      true, // 锁定后回到登录页，而不是关停（AC3.1/AC3.2）
+		SoftLock:      true,        // 锁定后回到登录页，而不是关停（AC3.1/AC3.2）
+		Sealer:        newSealer(), // 拖入视频即封存（US10）
 		Unlock: func(accountID, password string) (*ecdsa.PrivateKey, error) {
 			// 二次校验：即便引擎侧校验被绕过，也不按任意路径加载 keystore（AC8.7）。
 			discovered := desktopcfg.ListAccounts(home, cfg)

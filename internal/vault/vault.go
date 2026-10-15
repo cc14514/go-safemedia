@@ -1,11 +1,14 @@
 package vault
 
 import (
+	"context"
 	"crypto/cipher"
 	"crypto/ecdsa"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"sync"
 )
@@ -101,9 +104,30 @@ func SealFile(srcPath, dstPath string, pub *ecdsa.PublicKey) (*SealResult, error
 	return SealFileWithProgress(srcPath, dstPath, pub, nil)
 }
 
+// SealOptions 控制封存的目标文件处理方式。
+type SealOptions struct {
+	// Overwrite 为假时用 O_EXCL 创建目标：目标已存在则返回 ErrTargetExists
+	// （在写任何字节之前判定，调用方据此提示「已存在」，不得先写后删）。
+	Overwrite bool
+}
+
+// ErrTargetExists 表示目标密档已存在且未选择覆盖。
+var ErrTargetExists = errors.New("目标密档已存在")
+
 // SealFileWithProgress 与 SealFile 相同，但封存过程中回调已写入的明文字节数
 // （onProgress 为 nil 时不回调）。回调由调用方自行节流，vault 不保证频率。
 func SealFileWithProgress(srcPath, dstPath string, pub *ecdsa.PublicKey, onProgress func(done, total int64)) (*SealResult, error) {
+	return SealFileContext(context.Background(), srcPath, dstPath, pub, SealOptions{Overwrite: true}, onProgress)
+}
+
+// SealFileContext 与 SealFileWithProgress 相同，但可取消（桌面外壳的封存面板据此中止队列）。
+//
+// ctx 取消后当前块写入中止并返回 ctx.Err()；未完成的密档由调用方清理
+// （其中不含明文，删除是安全的）。
+func SealFileContext(ctx context.Context, srcPath, dstPath string, pub *ecdsa.PublicKey, opts SealOptions, onProgress func(done, total int64)) (*SealResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	src, err := os.Open(srcPath)
 	if err != nil {
 		return nil, err
@@ -126,15 +150,22 @@ func SealFileWithProgress(srcPath, dstPath string, pub *ecdsa.PublicKey, onProgr
 		return nil, err
 	}
 
-	dst, err := os.OpenFile(dstPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	flags := os.O_CREATE | os.O_WRONLY | os.O_TRUNC
+	if !opts.Overwrite {
+		flags = os.O_CREATE | os.O_WRONLY | os.O_EXCL
+	}
+	dst, err := os.OpenFile(dstPath, flags, 0o600)
 	if err != nil {
+		if errors.Is(err, fs.ErrExist) {
+			return nil, fmt.Errorf("%w: %s", ErrTargetExists, dstPath)
+		}
 		return nil, err
 	}
 	defer dst.Close()
 
 	var in io.Reader = src
-	if onProgress != nil {
-		in = &progressReader{r: src, total: info.Size(), onProgress: onProgress}
+	if onProgress != nil || ctx.Done() != nil {
+		in = &progressReader{ctx: ctx, r: src, total: info.Size(), onProgress: onProgress}
 	}
 	res, err := Seal(in, dst, pub, info.Size(), hint, DefaultChunkSize)
 	if err != nil {
@@ -144,8 +175,9 @@ func SealFileWithProgress(srcPath, dstPath string, pub *ecdsa.PublicKey, onProgr
 	return res, nil
 }
 
-// progressReader 统计从源文件读出的明文字节数并回调。
+// progressReader 统计从源文件读出的明文字节数并回调；ctx 取消时中止读取。
 type progressReader struct {
+	ctx        context.Context
 	r          io.Reader
 	total      int64
 	done       int64
@@ -153,9 +185,16 @@ type progressReader struct {
 }
 
 func (p *progressReader) Read(b []byte) (int, error) {
+	if p.ctx != nil {
+		if err := p.ctx.Err(); err != nil {
+			return 0, err
+		}
+	}
 	n, err := p.r.Read(b)
 	p.done += int64(n)
-	p.onProgress(p.done, p.total)
+	if p.onProgress != nil {
+		p.onProgress(p.done, p.total)
+	}
 	return n, err
 }
 

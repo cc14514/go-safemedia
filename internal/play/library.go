@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cc14514/go-safemedia/internal/seal"
 	"github.com/cc14514/go-safemedia/internal/vault"
 )
 
@@ -131,6 +132,10 @@ type LibraryOptions struct {
 	// SoftLock=true 时锁定时不关停服务，改为回到登录页（桌面外壳）；
 	// 默认 false：锁定即关停（CLI 既有行为）。
 	SoftLock bool
+
+	// Sealer 启用封存（US10）：为 nil 表示不支持（CLI 形态，封存仍走命令行）。
+	// 由外壳注入队列实现；引擎自身不 import internal/seal 的队列。
+	Sealer SealFactory
 }
 
 // Library 是目录（多密档）播放服务。
@@ -255,6 +260,12 @@ func NewLibrary(opts LibraryOptions) (*Library, error) {
 		unlockFn:    l.doUnlock,
 		session:     session,
 		preUnlocked: opts.Priv != nil,
+
+		sealer:         opts.Sealer,
+		startSealFn:    l.startSealQueue,
+		onSealDone:     l.rescanAfterSeal,
+		sealDefaultOut: l.Root,
+		dropToken:      randomToken(),
 	})
 	l.tree = buildTree(l.order)
 
@@ -263,6 +274,12 @@ func NewLibrary(opts LibraryOptions) (*Library, error) {
 	mux.HandleFunc("/watch/", l.handleWatch)
 	mux.HandleFunc("/library", l.handleLibrary)
 	mux.HandleFunc("/library/", l.handleLibrary)
+	mux.HandleFunc("/seal", l.core.handleSeal)
+	mux.HandleFunc("/seal/", l.core.handleSeal)
+	mux.HandleFunc("/seal/status", l.core.handleSealStatus)
+	mux.HandleFunc("/seal/cancel", l.core.handleSealCancel)
+	mux.HandleFunc("/seal/output", l.core.handleSealOutput)
+	mux.HandleFunc("/drop/", l.core.handleDrop)
 	mux.HandleFunc("/media/"+l.token+"/", l.handleMedia)
 	mux.HandleFunc("/lock", handleLockRequest(l.core))
 	l.handler = l.core.gate(mux)
@@ -320,6 +337,54 @@ func (l *Library) Root() string {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 	return l.root
+}
+
+// randomToken 生成 16 字节随机 hex（媒体地址与拖放投递地址共用）。
+func randomToken() string {
+	raw := make([]byte, 16)
+	if _, err := rand.Read(raw); err != nil {
+		return ""
+	}
+	return hex.EncodeToString(raw)
+}
+
+// DropURL 返回外壳原生拖放的投递地址（随机 token，仅本机环回）。
+func (l *Library) DropURL() string { return l.core.dropURL() }
+
+// startSealQueue 用当前解锁的账户公钥启动封存队列（未解锁/未注入 Sealer 时返回 nil）。
+func (l *Library) startSealQueue(jobs []seal.Job) SealQueue {
+	if l.core.sealer == nil || len(jobs) == 0 {
+		return nil
+	}
+	l.mu.RLock()
+	priv := l.priv
+	l.mu.RUnlock()
+	if priv == nil {
+		return nil
+	}
+	pub := &priv.PublicKey
+	return l.core.sealer(jobs, pub) // 工厂负责启动（返回时队列已在运行）
+}
+
+// rescanAfterSeal 在封存队列结束后重扫库根，使新密档无需重启就出现在目录树里（AC10.10）。
+// 扫描路径与 SetRoot 相同，但不触发 OnLibraryChange（库根没变，只是内容变了）。
+func (l *Library) rescanAfterSeal() {
+	root := l.Root()
+	entries, err := ScanLibrary(root)
+	if err != nil {
+		return
+	}
+	byID, order, err := assignIDs(entries)
+	if err != nil {
+		return
+	}
+	tree := buildTree(order)
+
+	l.mu.Lock()
+	l.byID = byID
+	l.order = order
+	l.tree = tree
+	l.mu.Unlock()
 }
 
 // normalizeDir 把用户输入的目录规范成绝对路径：支持 ~ 与相对路径；
@@ -415,6 +480,10 @@ func (l *Library) Count() int {
 func (l *Library) handleLibrary(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
+		if r.URL.Query().Get("purpose") == "seal" {
+			l.renderSealPicker(w, r.URL.Query().Get("path"))
+			return
+		}
 		l.renderPicker(w, r.URL.Query().Get("path"), "")
 
 	case http.MethodPost:
@@ -457,10 +526,46 @@ func (l *Library) renderPicker(w http.ResponseWriter, wanted, errMsg string) {
 	renderHTML(w, libraryPage(v))
 }
 
+// renderSealPicker 渲染「选择封存输出目录」页（US10.3）：同一个选择器，
+// 换掉标题/按钮文案与提交目标，并把 `purpose=seal` 带进所有链接。
+func (l *Library) renderSealPicker(w http.ResponseWriter, wanted string) {
+	out := l.core.sealOutputDir()
+	dir, err := normalizeDir(wanted)
+	var errMsg string
+	if err != nil {
+		errMsg = err.Error()
+		dir = out
+	}
+	v := l.pickerView(dir)
+	v.Purpose = "seal"
+	v.Root = out
+	v.RootLabel = "当前输出目录"
+	v.IsRoot = samePath(dir, out)
+	v.Err = combineMsg(errMsg, v.Err)
+	withPurpose(&v)
+	renderHTML(w, libraryPage(v))
+}
+
+// withPurpose 给选择页里的链接追加 purpose=seal，使浏览期间一直停留在封存输出目录模式。
+func withPurpose(v *pickerView) {
+	const extra = "&purpose=seal"
+	if v.Up != "" {
+		v.Up += extra
+	}
+	for i := range v.Dirs {
+		v.Dirs[i].Link += extra
+	}
+	for i := range v.Crumbs {
+		if !v.Crumbs[i].Last {
+			v.Crumbs[i].Link += extra
+		}
+	}
+}
+
 // pickerView 组装目录选择页数据：面包屑、上级、子目录列表（含直含密档数）。
 func (l *Library) pickerView(dir string) pickerView {
 	root := l.Root()
-	v := pickerView{Root: root, Path: dir, IsRoot: samePath(dir, root), Crumbs: buildCrumbs(dir)}
+	v := pickerView{Root: root, RootLabel: "当前库根", Path: dir, IsRoot: samePath(dir, root), Crumbs: buildCrumbs(dir)}
 	if up := filepath.Dir(dir); up != dir {
 		v.Up = libraryLink(up)
 	}
@@ -569,7 +674,7 @@ func (l *Library) handleIndex(w http.ResponseWriter, r *http.Request) {
 	l.mu.RUnlock()
 	writeNoCacheHeaders(w)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprint(w, indexPage(tree, root))
+	fmt.Fprint(w, indexPage(tree, root, l.core.sealAvailable()))
 }
 
 func (l *Library) handleWatch(w http.ResponseWriter, r *http.Request) {

@@ -13,11 +13,28 @@ func styleFixturePages() map[string]string {
 		Files: []treeFile{{Label: "a/one.mp4.svid", Name: "one.mp4.svid", Size: "1.0 MiB", Link: "/watch/aaa"}},
 	}}}
 	return map[string]string{
-		"index":  indexPage(tree, "/lib"),
+		"index":  indexPage(tree, "/lib", false),
 		"player": playerPage("one.mp4.svid", "/media/tok/aaa", "/watch/aaa", tree, "/watch/aaa"),
 		"picker": libraryPage(pickerView{Root: "/lib", Path: "/lib", Up: "/library?path=/",
 			Vaults: 2, Crumbs: []pickerCrumb{{Name: "lib", Last: true}},
 			Dirs: []pickerDir{{Name: "a", Link: "/library?path=/lib/a", Vaults: 1, SubDirs: 0}}}),
+		// US10：封存面板与「选择输出目录」模式的选择页也必须是桌面应用外观
+		"picker-seal": libraryPage(pickerView{Root: "/lib", RootLabel: "当前输出目录", Path: "/lib",
+			Purpose: "seal", Up: "/library?path=/&purpose=seal", IsRoot: true, Vaults: 2,
+			Crumbs: []pickerCrumb{{Name: "lib", Last: true}},
+			Dirs:   []pickerDir{{Name: "a", Link: "/library?path=/lib/a&purpose=seal", Vaults: 1, SubDirs: 0}}}),
+		"seal": sealPanelPage(sealPanelView{
+			Status: sealStatus{
+				Active: true,
+				Output: "/lib",
+				Items: []sealItemJSON{{
+					Name: "clip.mp4", State: "封存中", Percent: 42,
+					Done: "4.2 MiB", Total: "10.0 MiB",
+				}},
+				Rejects: []sealReject{{Path: "notes.txt", Reason: "不支持的容器格式（仅支持 mp4 / webm / mov）"}},
+				Summary: "1 个文件",
+			},
+		}),
 		"login": loginPage(loginView{Target: "/lib", Accounts: []AccountOption{
 			{ID: "/home/u/.safemedia/keystore.json", Label: "keystore.json", Note: "0x1a2b…9f8e"},
 			{ID: "/home/u/.safemedia/accounts/work.json", Label: "work.json", Note: "0x9ed7…da40"},

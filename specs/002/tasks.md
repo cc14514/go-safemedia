@@ -135,6 +135,33 @@
 - [x] T9.14 CLI 侧一致性：`account recover` 也先打印红线提示（`internal/cli/account.go` 用 `redlineWarning`；`tests/integration/account_cli_test.go` 断言两条命令都有红线提示）——recover 同样是「用户交出助记词」的高危入口（AC9.5）。
 - [x] T9.15 文档：`README.md` / `docs/manual.md`（账户管理用法与回收目录）、`CONTEXT.md`（术语「账户管理页」）、`AGENTS.md`（结构 + 外壳/账户管理要点 + 文案红线例外）、`tests/e2e/REPORT.md`（US9 行）。
 
+## M10 · 图形化封存（US10，用户 2026-10-15 指示新增）
+
+> 用户指示：「在 app 上集成一下 seal 功能，可以往指定的目录中拖拽视频文件，完成 seal，或者把某个目录拖进来，要给出实时进度。」机制：Wails 原生文件拖放（`EnableFileDrop` + `runtime.OnFileDrop` → 绝对路径）→ 外壳 POST 引擎的 `/drop/<token>` → 引擎队列 → 页面 `/seal` 轮询 `/seal/status` 出实时进度。
+
+- [x] T10.1 （测试先行）`internal/vault` 取消语义：`SealFileContext` 在取消时中止并返回 `context.Canceled`，**不留下半成品可读的密档**；`SealFileWithProgress` 行为不变（回归）。用例落在 `internal/seal/seal_test.go`（`TestSealFileContextCancelLeavesCleanState` / `TestSealFileContextOverwriteOff`，复用该包夹具）。
+- [x] T10.2 （测试先行）`internal/seal` 展开逻辑：`Collect` 覆盖文件/目录/多输入/输出目录/已存在/非白名单/已是密档/隐藏项/符号链接/相对结构（用例 `internal/seal/seal_test.go` 的 Collect 组，对照 CLI 既有语义）。
+- [x] T10.3 （测试先行）`internal/seal` 队列：顺序执行、进度单调递增、**不覆盖**（`ErrExists`）、单条失败不影响其它、取消时清理半成品（用例 `internal/seal/seal_test.go` 的 Queue 组：`TestQueueSealsSequentiallyWithProgress` / `…DoesNotOverwriteExisting` / `…IsolatesFailures` / `…CancelStopsAndCleansPartial` / `…NeverWritesPlaintext`）。
+- [x] T10.4 `internal/vault`：`SealFileContext`（`progressReader` 检查 `ctx.Err()`）；`SealFileWithProgress` 委托。
+- [x] T10.5 `internal/seal`：`Collect` + `Run` + `Job`/`Reject`/`Progress`/`ErrExists`；`internal/cli/seal.go` 改为调用（**CLI 输出与退出码逐字不变**，AC10.11）。
+- [x] T10.6 引擎队列与路由：`Options`/`LibraryOptions` 注入 `Sealer`（`internal/play` 只定义接口）；`/drop/<token>`（锁定态 409）、`/seal`（面板）、`/seal/status`（JSON，**不 touch**）、`/seal/output`（复用选择页 `purpose=seal`）；完成后重扫库根（AC10.10）；空闲看门狗在 `Active()` 时跳过、`lock()` 时 `Cancel()`（AC10.9）。
+- [x] T10.7 （测试先行）`internal/play/seal_flow_test.go`：面板与状态 JSON 的字段/文案、锁定态 409（不写盘）、`/seal/status` 不计空闲活动、投递 token 校验、面板随锁定态、锁定中止队列、封存中空闲不触发、完成后重扫。
+- [x] T10.8 页面：`/seal` 面板模板 + 进度条样式 + 每秒轮询脚本；索引页工具栏加「封存」入口（外观遵守 AC7.9/AC10.12）。
+- [x] T10.9 外壳：`main.go` 开 `EnableFileDrop` + `OnFileDrop` → POST `/drop/<token>`（409 → 原生提示）+ `WindowExecJS` 跳 `/seal`；引擎暴露 `DropURL()`。
+- [x] T10.10 （测试先行）L2 `tests/integration/seal_flow_test.go`：锁定态拖入 0 写盘 → 解锁 → POST `/drop` 文件与目录 → 轮询 `/seal/status` 到完成 → 库根重扫后新密档可播（AC10.1/10.2/10.3/10.10）。
+- [x] T10.11 （测试先行）L2：非白名单/已是密档/已存在的目标逐个有条目级原因且不影响其它条目（AC10.4/10.5）；输出目录不可写 → 条目级失败不 panic（AC10.6）。
+- [x] T10.12 锁定与封存：中途 `/lock` 中止队列 + 清理半成品 + 其余标记取消（AC10.9，L2 断言）；空闲不触发用短 idle 注入验证。
+- [x] T10.13 文档：`README.md` / `docs/manual.md`（拖动封存用法、输出目录、进度）；`CONTEXT.md`（术语「封存面板」）；`AGENTS.md`（US10 要点）；`specs/002/*`；`tests/e2e/REPORT.md`（US10 行）。
+- [x] T10.14 L3：新增端到端行（拖动封存 → 面板完成 → 新密档可播，Pre/Post 对比）。
+
+### M10 实现偏差与落实（2026-10-15 实现后回填）
+
+- 计划里的 `internal/seal/{collect_test.go,run_test.go}` 与 `internal/play/seal_page_test.go` 实际合并落成 `internal/seal/seal_test.go`（Collect / Queue / 取消三组）与 `internal/play/seal_flow_test.go`；L2 落在 `tests/integration/seal_flow_test.go`（`TestM10DragDropSealsAndShowsProgress`、`TestM10DropTokenIsRequired`）。
+- **投递凭证不进页面**：`/drop/<token>` 的随机 token 只存在于外壳进程内存里（外壳自己 POST，页面只轮询 `/seal/status`），因此不写入任何渲染过的 HTML——比「投递地址渲染进页面」更小的暴露面。
+- 路由补一条：`/seal/`（带尾斜杠）此前会落到 `/` 兜底、静默渲染**索引页**；现与 `/library/` 一致地显式注册（`internal/play/library.go`）。L3 用例 `TestE2E_SealPanelBootFirstPaint` 正好用 `GET /seal/` 取面板 HTML。
+- 首屏状态注入方式：`<script>` 里直接注入 **JS 对象字面量**（`const boot = {{.Status}};`）。曾用 `<script type="application/json">` + `JSON.parse(textContent)` 失败——见 `AGENTS.md` 易错点 9；`zz_vis_dump`/L3 的浏览器用例钉住它。
+- `internal/vault` 新增 `SealFileContext` + `SealOptions{Overwrite}`（`ErrTargetExists`）；`SealFileWithProgress` 改为委托（默认覆盖），CLI 语义逐字不变（AC10.11）。
+
 ## 收尾
 
 - [x] T6.1 `make test`（L1+L2）全绿（含 `-race`）。

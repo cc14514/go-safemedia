@@ -195,13 +195,14 @@ const indexSrc = `{{define "index"}}<!doctype html>
   <div class="tbwrap">
     <h1>密档库</h1>
     <span class="grow"></span>
+    {{if .Sealing}}<a class="btn" href="/seal">封存视频…</a>{{end}}
     <a class="btn primary" href="/library">选择密档库…</a>
   </div>
 </header>
 <main>
   <p class="sub">库根：<code>{{.Root}}</code> ｜ 共 {{.Count}} 个密档（含子目录）</p>
   {{if .HasTree}}{{template "tree" .Tree}}
-  {{else}}<div class="empty">这个目录里没有 .svid 密档。<br>先运行 <code>safemedia seal &lt;video&gt;</code> 封存视频。</div>{{end}}
+  {{else}}<div class="empty">这个目录里没有 .svid 密档。<br>{{if .Sealing}}把视频拖到窗口上，或点右上角「封存视频…」。{{else}}先运行 <code>safemedia seal &lt;video&gt;</code> 封存视频。{{end}}</div>{{end}}
 </main>
 </body>
 </html>{{end}}`
@@ -258,7 +259,7 @@ const librarySrc = `{{define "library"}}<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
-<title>选择密档库</title>
+<title>{{if eq .Purpose "seal"}}选择输出目录{{else}}选择密档库{{end}}</title>
 <style>
 {{template "baseCSS"}}
   main { width:min(100%,var(--content)); margin:0 auto; padding:22px 24px 44px; }
@@ -294,27 +295,28 @@ const librarySrc = `{{define "library"}}<!doctype html>
 <body>
 <header class="toolbar">
   <div class="tbwrap">
-    <h1>选择密档库</h1>
+    <h1>{{if eq .Purpose "seal"}}选择输出目录{{else}}选择密档库{{end}}</h1>
     <span class="grow"></span>
     {{if .Up}}<a class="btn" href="{{.Up}}">↑ 上级目录</a>{{end}}
-    <a class="btn" href="/">← 返回密档库索引</a>
+    <a class="btn" href="{{if eq .Purpose "seal"}}/seal{{else}}/{{end}}">{{if eq .Purpose "seal"}}← 返回封存{{else}}← 返回密档库索引{{end}}</a>
   </div>
 </header>
 <main>
-  <p class="sub">当前库根：<code>{{.Root}}</code></p>
+  <p class="sub">{{.RootLabel}}：<code>{{.Root}}</code></p>
   {{if .Err}}<p class="err">{{.Err}}</p>{{end}}
   <nav class="crumbs">{{range .Crumbs}}{{if .Last}}<span class="cur">{{.Name}}</span>{{else}}<a href="{{.Link}}">{{.Name}}</a><span class="sep">›</span>{{end}}{{end}}</nav>
   <form class="pathbar" method="get" action="/library">
+    {{if eq .Purpose "seal"}}<input type="hidden" name="purpose" value="seal">{{end}}
     <input name="path" value="{{.Path}}" spellcheck="false" autocomplete="off" autocapitalize="off">
     <button type="submit">转到</button>
   </form>
   <div class="actions">
-    <form method="post" action="/library">
+    <form method="post" action="{{if eq .Purpose "seal"}}/seal/output{{else}}/library{{end}}">
       <input type="hidden" name="path" value="{{.Path}}">
-      <button class="primary" type="submit">使用此目录作为库根</button>
+      <button class="primary" type="submit">{{if eq .Purpose "seal"}}使用此目录作为输出目录{{else}}使用此目录作为库根{{end}}</button>
     </form>
   </div>
-  <p class="meta">本目录直接包含 {{.Vaults}} 个密档{{if .IsRoot}}；这就是当前库根{{end}}</p>
+  <p class="meta">本目录直接包含 {{.Vaults}} 个密档{{if .IsRoot}}；{{if eq .Purpose "seal"}}这就是当前输出目录{{else}}这就是当前库根{{end}}{{end}}</p>
   {{if .Dirs}}<ul class="dirs">{{range .Dirs}}<li><a href="{{.Link}}" class="row" title="{{.Name}}"><svg class="ico" viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M1.5 4.5c0-.8.6-1.4 1.4-1.4h2.8c.4 0 .8.2 1 .5l.9 1.1h5.5c.8 0 1.4.6 1.4 1.4v5.4c0 .8-.6 1.4-1.4 1.4H2.9c-.8 0-1.4-.6-1.4-1.4V4.5z" fill="#5f92d8" fill-opacity=".9"/></svg>{{.Name}}/</a><span class="n">{{.Vaults}} 个密档 · {{.SubDirs}} 个子目录</span></li>{{end}}</ul>
   {{else}}<div class="empty">这个目录下没有可进入的子目录。</div>{{end}}
 </main>
@@ -654,8 +656,8 @@ var pageTmpl = template.Must(template.New("pages").Funcs(template.FuncMap{
 	"nodeWith": func(ctx treeCtx, n treeNode) treeCtx {
 		return treeCtx{Node: n, Active: ctx.Active}
 	},
-}).Parse(baseCSS + accountsCSS + treeCSS + treeTmpl + playerSrc + indexSrc + librarySrc + loginSrc +
-	accountsSrc + createSrc + mnemonicSrc + recoverSrc + deleteSrc))
+}).Parse(baseCSS + accountsCSS + sealCSS + treeCSS + treeTmpl + playerSrc + indexSrc + librarySrc + loginSrc +
+	accountsSrc + createSrc + mnemonicSrc + recoverSrc + deleteSrc + sealSrc))
 
 // playerPage 渲染播放页。tree 为空则不显示左侧目录树（单密档模式）。
 // Title 做 HTML 转义（密档文件名可能含任意字符）；back 为空则不显示返回链接。
@@ -687,18 +689,20 @@ func playerPage(name, mediaPath, back string, tree treeNode, active string) stri
 }
 
 // indexPage 渲染目录索引页（按目录树分组，AC5.4）；root 为当前库根（US7 显示用）。
-func indexPage(tree treeNode, root string) string {
+func indexPage(tree treeNode, root string, sealing bool) string {
 	var b strings.Builder
 	err := pageTmpl.ExecuteTemplate(&b, "index", struct {
 		Tree    treeCtx
 		HasTree bool
 		Count   int
 		Root    string
+		Sealing bool
 	}{
 		Tree:    treeCtx{Node: tree},
 		HasTree: !tree.empty(),
 		Count:   tree.count(),
 		Root:    root,
+		Sealing: sealing,
 	})
 	if err != nil {
 		return renderError(err)
@@ -731,6 +735,11 @@ type pickerView struct {
 	Vaults int
 	Crumbs []pickerCrumb
 	Dirs   []pickerDir
+
+	// RootLabel 是「当前库根 / 当前输出目录」这行的标题（US10.3 复用同一个选择器）。
+	RootLabel string
+	// Purpose 为空表示选库根（POST /library）；"seal" 表示选封存输出目录（POST /seal/output）。
+	Purpose string
 }
 
 // libraryPage 渲染密档库目录选择页。
@@ -822,4 +831,129 @@ func renderError(err error) string {
 	return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>渲染失败</title></head>` +
 		`<body style="background:#111;color:#e8e8e8;font:15px -apple-system,sans-serif;padding:32px">` +
 		`<h1 style="font-size:16px">页面渲染失败</h1><pre>` + template.HTMLEscapeString(err.Error()) + `</pre></body></html>`
+}
+
+// sealCSS 是封存面板（US10）的样式：只加不删，避免影响既有页面。
+const sealCSS = `{{define "sealCSS"}}
+  ul.jobs { list-style:none; margin:0; padding:0; background:var(--panel); border:1px solid var(--line-soft);
+            border-radius:10px; overflow:hidden; }
+  ul.jobs li { padding:9px 14px; border-top:1px solid #26262a; }
+  ul.jobs li:first-child { border-top:none; }
+  .jrow { display:flex; align-items:baseline; gap:10px; }
+  .jrow .nm { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .jrow .st { color:var(--dim); font-size:12px; white-space:nowrap; }
+  .jrow .st.bad { color:#ffb0b0; }
+  .jrow .st.ok { color:#8fd18f; }
+  .bar { display:block; height:5px; margin-top:7px; border-radius:3px; background:#ffffff14; overflow:hidden; }
+  .bar i { display:block; height:100%; width:0; background:#3f9f5f; border-radius:3px; transition:width .35s ease; }
+  .bar.wait i { background:#6a6a72; }
+  .reason { color:#ffb0b0; font-size:12px; margin-top:5px; word-break:break-all; }
+  .warn { margin:0 0 14px; background:#3a2f16; border:1px solid #7a6224; color:#ffd894;
+          padding:10px 12px; border-radius:8px; font-size:13px; }
+  .spin { display:inline-block; width:9px; height:9px; border-radius:50%; background:#3f9f5f; margin-right:6px; }
+{{end}}`
+
+// sealSrc 是封存面板页（US10.2）：实时进度 + 输出目录 + 取消。
+// 进度用 1s 轮询 /seal/status（同源 fetch），页面本身不做任何解密/文件访问。
+const sealSrc = `{{define "seal"}}<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>封存视频</title>
+<style>
+{{template "baseCSS"}}
+{{template "sealCSS"}}
+  main { width:min(100%,var(--content)); margin:0 auto; padding:22px 24px 44px; }
+  p.sub { color:var(--dim); font-size:12.5px; margin:0 0 16px; word-break:break-all; }
+  .empty { border:1px dashed var(--line); border-radius:10px; padding:26px; text-align:center;
+           color:var(--dim); font-size:13px; }
+  .actions { display:flex; align-items:center; gap:10px; margin:16px 0 0; }
+  p.summary { color:var(--dim); font-size:12.5px; margin:14px 0 0; }
+</style>
+</head>
+<body>
+<header class="toolbar">
+  <div class="tbwrap">
+    <h1>封存视频</h1>
+    <span class="grow"></span>
+    <a class="btn" href="/library?purpose=seal">更改输出目录…</a>
+    <a class="btn" href="/">← 返回密档库</a>
+  </div>
+</header>
+<main>
+  <p class="sub">输出目录：<code id="out">{{.Status.Output}}</code></p>
+  <div id="rejects"></div>
+  <ul class="jobs" id="jobs"></ul>
+  <div class="empty" id="empty">把视频文件或文件夹拖到窗口上即可开始封存。</div>
+  <p class="summary" id="summary"></p>
+  <div class="actions" id="actions">
+    <form method="post" action="/seal/cancel"><button type="submit">取消封存</button></form>
+  </div>
+</main>
+<script>
+// 首屏状态直接以「JS 对象字面量」注入（html/template 在 script 上下文里把 Go 结构体
+// 编码成合法 JS 字面量）。**不要**把它塞进 <script type="application/json"> 再
+// JSON.parse(textContent)——那样模板会把字符串再包一层转义，parse 出来是个字符串、
+// 页面首屏会静默渲染成空（曾发生；无头 Chrome 的首屏用例钉住它）。
+const jobs = document.getElementById('jobs');
+const empty = document.getElementById('empty');
+const summary = document.getElementById('summary');
+const rejects = document.getElementById('rejects');
+const outEl = document.getElementById('out');
+const actions = document.getElementById('actions');
+
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function render(d) {
+  if (d.output) outEl.textContent = d.output;
+  if (d.rejects && d.rejects.length) {
+    rejects.innerHTML = '<div class="warn">' + d.rejects.map(r =>
+      esc(r.path) + '：' + esc(r.reason)).join('<br>') + '</div>';
+  } else {
+    rejects.innerHTML = '';
+  }
+  const items = d.items || [];
+  empty.style.display = items.length ? 'none' : 'block';
+  jobs.innerHTML = items.map(it => {
+    const cls = it.state === '失败' ? 'st bad' : (it.state === '完成' ? 'st ok' : 'st');
+    const bar = it.state === '待封存' ? 'bar wait' : 'bar';
+    const reason = it.reason ? '<div class="reason">' + esc(it.reason) + '</div>' : '';
+    const size = it.total ? (it.done + ' / ' + it.total) : '';
+    return '<li><div class="jrow"><span class="nm">' + esc(it.name) + '</span>' +
+      '<span class="' + cls + '">' + esc(it.state) + ' ' + (it.percent || 0) + '%</span></div>' +
+      '<span class="' + bar + '"><i style="width:' + (it.percent || 0) + '%"></i></span>' +
+      '<div class="reason" style="color:var(--dim)">' + esc(size) + '</div>' + reason + '</li>';
+  }).join('');
+  summary.textContent = d.active ? ('封存中… ' + (d.summary || '')) : (d.summary || '');
+  actions.style.display = d.active ? 'flex' : 'none';
+}
+
+const boot = {{.Status}};
+render(boot);
+var timer = setInterval(tick, 1000);
+
+async function tick() {
+  try {
+    const r = await fetch('/seal/status', {cache: 'no-store'});
+    if (r.status === 403 || r.status === 410) { location.reload(); return; }
+    if (r.ok) render(await r.json());
+  } catch (e) { /* 服务已关闭：停止轮询 */ clearInterval(timer); }
+}
+</script>
+</body>
+</html>{{end}}`
+
+// sealPanelView 是封存面板的数据。
+type sealPanelView struct {
+	Target string
+	Status sealStatus
+}
+
+// sealPanelPage 渲染封存面板（模板执行失败必须可见，不得静默截断）。
+func sealPanelPage(v sealPanelView) string {
+	return renderTemplate("seal", v)
 }

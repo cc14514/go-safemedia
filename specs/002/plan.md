@@ -241,6 +241,26 @@ type AccountsAdmin interface {
 
 **风险**：R7 管理动作由页面触发，误操作面比 CLI 大——缓解＝删除需口令 + 回收目录 + 明确后果文案 + 锁定态专属；R8 助记词进入 DOM——缓解＝无复制按钮、`no-store`、待确认态短生命周期、离开即清（不落盘已由 NFR-5/AC4.1 的缓存对照实验覆盖）。
 
+## 17. 图形化封存（US10：引擎侧队列 + 外壳侧原生拖放）
+
+**拖放通道**：外壳开 `options.DragAndDrop{EnableFileDrop:true}`，用 `runtime.OnFileDrop(ctx, func(x, y int, paths []string))` 拿**绝对路径**。这是 Wails 原生通道（macOS 侧即 `NSWindow` 的 drop target → `wails:file-drop` 事件，已读 v2.16 源码确认），**不经 DOM、不经 webview**，因此不受 webview 的 DOM 拖放/安全限制（无需 crypto.subtle）影响。外壳把路径 POST 给引擎的**令牌 URL** `/drop/<token>`（随机 token、环回、生命周期同服务，与 `/media/<token>` 同款），然后让 webview 跳转 `/seal`（`runtime.WindowExecJS`）。外壳仍是零业务逻辑，引擎是唯一实现处。
+
+**引擎侧新增 `internal/seal`**（纯函数，便于 L1 直测）：
+- `Collect(paths []string, outDir string) (jobs []Job, rejects []Reject)`：把 CLI 的 `collectSealJobs` / `walkSealDir` / `sealFileOutput` **搬到这里**，**CLI 改为调用它**（AC10.11：一套展开逻辑，两处呈现）；`Reject{Path, Reason}` 承载「非白名单 / 已是密档 / 目标已存在」等原因。
+- `Run(ctx, jobs, pub, opts)`：顺序执行（不并发，AC10.5），每条目回调 `Progress{State, Done, Total, Err}`。
+- **不覆盖**：目标用 `O_CREATE|O_EXCL` 打开，在写任何字节**之前**判定（`errors.Is(err, fs.ErrExist)` → `ErrExists` 哨兵；CLI 据此打印原样的「已存在（用 --force 覆盖）」，页面显示「已存在（跳过）」）。
+- **失败/中止清理半成品**（AC10.8）：与 CLI 同语义，删除未完成的 `.svid`（其中不含明文）。
+
+**取消**（AC10.9）：`internal/vault` 增加 `SealFileContext(ctx, src, dst, pub, onProgress)`（`SealFileWithProgress` 保留并委托 `context.Background()`，CLI/测试不受影响）；`progressReader` 在每次读前检查 `ctx.Err()`，取消即返回 `context.Canceled` → `SealFileContext` 中止并让 `seal.Run` 清理半成品。
+
+**页面**：索引页工具栏加「封存」按钮 → `/seal` 面板（当前输出目录 + 「更改输出目录…」+ 条目表：名称 / 进度条 / 已写与总字节 / 状态 / 失败原因），面板内 `setInterval` 每秒 GET `/seal/status`（JSON）刷新。**`/seal/status` 不调用 `touch()`**——自动刷新不得把空闲锁定刷掉。`/seal/output` 复用目录选择页（`purpose=seal`）改输出目录（仅本次会话）。
+
+**锁定边界**（AC10.7）：`/drop/<token>` 与 `/seal/status` 在锁定态一律拒绝（409/落到登录页），外壳据 409 弹原生提示「请先解锁」。空闲看门狗在 `runner.Active()` 为真时**跳过**判定（AC10.9 前半）；显式锁定 `runner.Cancel()`（后半）。
+
+**完成后刷新**（AC10.10）：队列结束（含部分失败）后调用库根重扫（与 US7 同一函数）。
+
+**风险**：R9 未解锁时拖入易困惑 → 外壳据 409 弹原生提示；R10 封存与重扫并发 → 重扫只在队列结束后触发一次。
+
 ## 15. 评审门
 
 - [x] 确认引擎三态生命周期与 `SoftLock` 语义（CLI 保持关停，外壳软锁定回登录页）——已实现并过 L1/L2（参数名以实现为准，见 `tasks.md` 对齐记录）

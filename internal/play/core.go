@@ -24,6 +24,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/cc14514/go-safemedia/internal/seal"
 )
 
 // DefaultIdleTimeout 是空闲自动锁定时长（FR-5.2）。
@@ -47,6 +49,13 @@ type coreConfig struct {
 	unlockFn    func(accountID, password string) error
 	session     string // 非空 → 解锁后内容路由要求该会话 cookie
 	preUnlocked bool   // 构造时已持有密钥（CLI/测试路径）
+
+	// 封存（US10）：sealer 为空表示当前模式不支持封存。
+	sealer         SealFactory                // 由外壳注入的队列实现
+	startSealFn    func([]seal.Job) SealQueue // 由 Library/Player 提供（带公钥启动队列）
+	onSealDone     func()                     // 队列结束后重扫库根
+	sealDefaultOut func() string              // 默认输出目录（库根）
+	dropToken      string                     // 拖放投递 token（随机）
 }
 
 // core 是单文件模式与目录模式共用的生命周期：监听、门控、空闲监控、锁定。
@@ -72,6 +81,19 @@ type core struct {
 	// accMu 保护账户管理的展示副本（US9 待确认创建的助记词与抽查序号）。
 	accMu      sync.Mutex
 	challenges map[string]challengeEntry
+
+	// sealMu 保护封存队列状态（US10）：当前队列、本轮未封存的输入、会话内输出目录。
+	sealMu      sync.Mutex
+	queue       SealQueue
+	sealRejects []sealReject
+	sealOut     string
+
+	// 封存依赖（构造后只读）：sealer 为空表示当前模式不支持封存。
+	sealer         SealFactory
+	startSealFn    func([]seal.Job) SealQueue
+	onSealDone     func()
+	sealDefaultOut func() string
+	dropToken      string
 
 	last     atomic.Int64 // 最近一次请求时间（UnixNano）
 	locked   atomic.Bool  // 密钥已清零（需要再次解锁）
@@ -104,6 +126,12 @@ func newCore(cfg coreConfig) *core {
 		unlockFn:    cfg.unlockFn,
 		session:     cfg.session,
 		challenges:  map[string]challengeEntry{},
+
+		sealer:         cfg.sealer,
+		startSealFn:    cfg.startSealFn,
+		onSealDone:     cfg.onSealDone,
+		sealDefaultOut: cfg.sealDefaultOut,
+		dropToken:      cfg.dropToken,
 	}
 	c.unlocked.Store(cfg.preUnlocked)
 	c.locked.Store(!cfg.preUnlocked)
@@ -177,6 +205,10 @@ func (c *core) watchIdle(gen uint64) {
 		if c.idleGen.Load() != gen || c.closed.Load() || !c.unlocked.Load() {
 			return
 		}
+		// 封存进行中不自动锁定（AC10.9）：批处理可能跑很久，此时既不算空闲也不能中断。
+		if c.queueActive() {
+			continue
+		}
 		if c.now().Sub(time.Unix(0, c.last.Load())) >= c.idleTimeout {
 			c.lock(fmt.Sprintf("空闲超过 %s，已自动锁定并清零密钥", c.idleTimeout))
 			return
@@ -199,6 +231,8 @@ func (c *core) lock(reason string) {
 	}
 	c.unlocked.Store(false)
 	c.idleGen.Add(1) // 作废空闲监视
+	// 显式锁定同时中止封存队列（AC10.9）：正在写的那份密档按取消处理（删除半成品）。
+	c.cancelSeal()
 	if c.onLockExtra != nil {
 		c.onLockExtra()
 	}
@@ -228,6 +262,7 @@ func (c *core) closeService() {
 func (c *core) shutdown() error {
 	c.closed.Store(true)
 	c.idleGen.Add(1)
+	c.cancelSeal() // 关停同样中止封存（半成品按取消处理）
 	if c.onLockExtra != nil {
 		c.onLockExtra()
 	}
@@ -257,6 +292,13 @@ func (c *core) gate(content http.Handler) http.Handler {
 		// 账户管理（US9）：只在锁定态可用；解锁后一律回索引页（AC9.10）。
 		if r.URL.Path == "/accounts" || strings.HasPrefix(r.URL.Path, "/accounts/") {
 			c.handleAccounts(w, r)
+			return
+		}
+		// 拖放投递（US10）：与媒体路由同样靠「随机 token」鉴权，不走会话 cookie
+		// （拖放来自外壳进程，它不持有 webview 的会话 cookie）。
+		// 是否解锁由 handleDrop 自己判定：锁定态返回 409 + 明确原因（AC10.7）。
+		if strings.HasPrefix(r.URL.Path, "/drop/") {
+			c.handleDrop(w, r)
 			return
 		}
 		if !c.unlocked.Load() {
