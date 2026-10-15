@@ -171,23 +171,24 @@ func buildEngine(target desktopcfg.Target, home string, cfg desktopcfg.Config) (
 		return nil, "", err
 	}
 	// 登录页可选的本地账户（US8/FR-6.7）：只读 keystore 的公开地址，不需要口令。
-	discovered := desktopcfg.ListAccounts(home, cfg)
-	allowed := make(map[string]bool, len(discovered))
-	opts := make([]play.AccountOption, 0, len(discovered))
-	for _, a := range discovered {
-		allowed[a.Path] = true
-		opts = append(opts, play.AccountOption{ID: a.Path, Label: a.Name, Note: a.Short})
-	}
+	// 每次渲染重新发现（AC9.1）：管理页新建/删除账户后登录页立刻可见。
 	fallback := target.Account
+	admin := desktopcfg.NewAccountAdmin(desktopcfg.AdminOptions{Home: home, Config: cfg})
 	lib, err := play.NewLibrary(play.LibraryOptions{
-		Entries:     entries,
-		Target:      root,
-		Root:        root,
-		Accounts:    opts,
-		IdleTimeout: play.DefaultIdleTimeout,
-		SoftLock:    true, // 锁定后回到登录页，而不是关停（AC3.1/AC3.2）
+		Entries:       entries,
+		Target:        root,
+		Root:          root,
+		Accounts:      func() []play.AccountOption { return playAccounts(home, cfg) },
+		AccountsAdmin: accountAdmin{home: home, cfg: cfg, inner: admin},
+		IdleTimeout:   play.DefaultIdleTimeout,
+		SoftLock:      true, // 锁定后回到登录页，而不是关停（AC3.1/AC3.2）
 		Unlock: func(accountID, password string) (*ecdsa.PrivateKey, error) {
 			// 二次校验：即便引擎侧校验被绕过，也不按任意路径加载 keystore（AC8.7）。
+			discovered := desktopcfg.ListAccounts(home, cfg)
+			allowed := make(map[string]bool, len(discovered))
+			for _, a := range discovered {
+				allowed[a.Path] = true
+			}
 			if len(allowed) > 0 && !allowed[accountID] {
 				return nil, errors.New("请选择一个可用账户")
 			}
@@ -228,7 +229,7 @@ func loadAccount(accountPath, password string) (*account.Account, error) {
 	defer account.Wipe(pass)
 
 	if _, err := os.Stat(accountPath); err != nil {
-		return nil, fmt.Errorf("找不到账户文件 %s：请先用命令行执行 `safemedia account create` 新建账户", accountPath)
+		return nil, fmt.Errorf("找不到账户文件 %s：请在登录页点「账户管理」新建账户，或命令行执行 `safemedia account create`", accountPath)
 	}
 	acct, err := account.LoadKeystoreWithPassphrase(accountPath, pass)
 	if err != nil {

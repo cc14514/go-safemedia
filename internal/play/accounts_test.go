@@ -62,9 +62,11 @@ func newAccountsLibrary(t *testing.T, accounts bool) (*play.Library, *int, *stri
 		},
 	}
 	if accounts {
-		opts.Accounts = []play.AccountOption{
-			{ID: acctA, Label: "keystore.json — 0x1a2b…9f8e"},
-			{ID: acctB, Label: "工作.json — 0x9e7d…da40"},
+		opts.Accounts = func() []play.AccountOption {
+			return []play.AccountOption{
+				{ID: acctA, Label: "keystore.json — 0x1a2b…9f8e"},
+				{ID: acctB, Label: "工作.json — 0x9e7d…da40"},
+			}
 		}
 	}
 	lib, err := play.NewLibrary(opts)

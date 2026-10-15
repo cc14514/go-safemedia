@@ -2,14 +2,19 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cc14514/go-safemedia/internal/account"
 	"github.com/cc14514/go-safemedia/internal/desktopcfg"
@@ -342,4 +347,243 @@ func desktopPost(t *testing.T, u string, form url.Values) (string, int) {
 		t.Fatal(err)
 	}
 	return string(b), resp.StatusCode
+}
+
+// T9.13（AC9.3/AC9.4/AC9.6/AC9.8/AC9.10/AC9.11）：外壳里走完
+// 「创建 → 登录页立刻可见 → 用它解锁 → 锁定 → 删除」全链路。
+//
+// 走**生产接线**（`buildEngine` 内部构造 desktopcfg 账户管理器）、真实文件、真实 scrypt
+// 强度、真实页面 —— 这是唯一能证明「引擎的账户管理页 + desktopcfg 的账户动作 + 配置回写」
+// 三者真的接起来的地方（tests/integration 不能 import package main）。
+func TestDesktopAccountManagementEndToEnd(t *testing.T) {
+	home := t.TempDir()
+	libDir := filepath.Join(home, "lib")
+	if err := os.MkdirAll(libDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	pw := "desktop gui account passphrase"
+	mainKs := filepath.Join(desktopcfg.DefaultDir(home), "keystore.json")
+	cfg := desktopcfg.Config{Account: mainKs}
+
+	eng, _, err := buildEngine(desktopcfg.Target{Kind: desktopcfg.KindLibrary, Path: libDir}, home, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+	base, err := eng.Start()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 带 cookie 的客户端：会话状态必须是真的（不然「已解锁」之类的断言会被 403 蒙混过去）。
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hc := &http.Client{Jar: jar, CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+	request := func(path string, form url.Values) (string, int, string) {
+		t.Helper()
+		var resp *http.Response
+		var reqErr error
+		if form == nil {
+			resp, reqErr = hc.Get(base + path)
+		} else {
+			resp, reqErr = hc.PostForm(base+path, form)
+		}
+		if reqErr != nil {
+			t.Fatal(reqErr)
+		}
+		defer resp.Body.Close()
+		b, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		return string(b), resp.StatusCode, resp.Header.Get("Location")
+	}
+	get := func(path string) string { body, _, _ := request(path, nil); return body }
+
+	// ① 锁定态：登录页有账户管理入口；管理页是空状态（AC9.1）
+	if page := get(""); !strings.Contains(page, `href="/accounts"`) {
+		t.Fatalf("登录页缺少账户管理入口:\n%s", page)
+	}
+	if page := get("accounts"); !strings.Contains(page, "还没有账户") {
+		t.Fatalf("无账户时管理页应为空状态:\n%s", page)
+	}
+
+	// ② 创建（AC9.3/AC9.4）：提交口令 → 303 到抽查页
+	body, code, loc := request("accounts/new", url.Values{
+		"name": {""}, "words": {"12"}, "password": {pw}, "password2": {pw},
+	})
+	if code != http.StatusSeeOther {
+		t.Fatalf("创建提交应 303，得到 %d\n%s", code, body)
+	}
+	if loc == "" {
+		t.Fatal("创建提交未给出重定向目标（抽查页地址）")
+	}
+	confirm := get(strings.TrimPrefix(loc, "/"))
+	words := mnemonicWordsOf(t, confirm)
+	answers := url.Values{"token": {tokenOf(t, loc)}}
+	for i, idx := range promptIndexesOf(t, confirm) {
+		answers.Set(fmt.Sprintf("word%d", i+1), words[idx-1])
+	}
+
+	// 抽查未通过前不得写入账户文件（AC9.3）
+	if fileExists(mainKs) {
+		t.Fatalf("复述抽查通过前不该写入账户文件：%s", mainKs)
+	}
+
+	// ③ 复述通过 → 写入默认账户路径，且能用该口令打开（AC9.4）
+	if _, code, _ := request("accounts/new/confirm", answers); code != http.StatusSeeOther {
+		t.Fatalf("复述通过应 303，得到 %d", code)
+	}
+	if _, err := account.LoadKeystore(mainKs, pw); err != nil {
+		t.Fatalf("GUI 创建的账户文件应能用口令打开: %v", err)
+	}
+
+	// ④ 登录页立刻列出新账户（AC9.1）
+	if login := get(""); !strings.Contains(login, `<option value="`+mainKs+`"`) {
+		t.Fatalf("新建账户后登录页未列出它:\n%s", login)
+	}
+
+	// ⑤ 用它解锁（闭环：GUI 建的账户真能解锁引擎，并拿到索引页）
+	body, code, _ = request("login", url.Values{"account": {mainKs}, "password": {pw}})
+	if code != http.StatusSeeOther {
+		t.Fatalf("用 GUI 创建的账户解锁应 303，得到 %d\n%s", code, body)
+	}
+	index := get("")
+	if strings.Contains(index, `action="/login"`) {
+		t.Fatalf("解锁后仍是登录页（会话未生效）:\n%s", index)
+	}
+	if !strings.Contains(index, "选择密档库") {
+		t.Fatalf("解锁后应是库索引页:\n%s", index)
+	}
+
+	// ⑥ 已解锁时删除路由不生效，一律回索引页（AC9.10）
+	if body, code, _ := request("accounts/delete", url.Values{"path": {mainKs}, "password": {pw}}); code != http.StatusSeeOther {
+		t.Fatalf("已解锁时删除路由应 303 回索引，得到 %d\n%s", code, body)
+	}
+	if !fileExists(mainKs) {
+		t.Fatal("已解锁时不该真的删除账户（AC9.10）")
+	}
+
+	// ⑦ 锁定后删除：要口令授权，文件移入回收目录（AC9.8/AC9.9）
+	if _, code, _ := request("lock", url.Values{}); code != http.StatusOK {
+		t.Fatalf("锁定失败，code=%d", code)
+	}
+	waitLocked(t, base)
+	if page := get("accounts/delete?path=" + url.QueryEscape(mainKs)); !strings.Contains(page, "永久无法启封") {
+		t.Fatalf("删除确认页必须说明后果:\n%s", page)
+	}
+	body, code, _ = request("accounts/delete", url.Values{"path": {mainKs}, "password": {"wrong passphrase x"}})
+	if code != http.StatusOK || !strings.Contains(body, "口令错误") {
+		t.Fatalf("错口令不该删除（code=%d）:\n%s", code, body)
+	}
+	if !fileExists(mainKs) {
+		t.Fatal("错口令却把账户删了")
+	}
+	if _, code, _ := request("accounts/delete", url.Values{"path": {mainKs}, "password": {pw}}); code != http.StatusSeeOther {
+		t.Fatalf("对口令应删除成功（303），得到 %d", code)
+	}
+	if fileExists(mainKs) {
+		t.Fatal("删除后账户文件仍在原处")
+	}
+	trashed, err := os.ReadDir(filepath.Join(desktopcfg.DefaultDir(home), "trash"))
+	if err != nil || len(trashed) == 0 {
+		t.Fatalf("回收目录里应有被删账户: %v", err)
+	}
+	if !strings.Contains(trashed[0].Name(), "keystore.json") {
+		t.Fatalf("回收文件名应保留原名: %s", trashed[0].Name())
+	}
+
+	// ⑧ 登录页不再列出该账户；配置里指向它的 account 字段被清空（AC9.11）
+	if page := get(""); strings.Contains(page, `<option value="`+mainKs+`"`) {
+		t.Fatalf("删除后登录页仍列出该账户:\n%s", page)
+	}
+	reloaded, err := desktopcfg.Load(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.Account != "" {
+		t.Fatalf("被删账户仍是配置的默认账户：%q", reloaded.Account)
+	}
+}
+
+// desktopPostLoc 提交表单并返回重定向目标（不跟随跳转）。
+func desktopPostLoc(t *testing.T, u string, form url.Values) (string, int) {
+	t.Helper()
+	c := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+	resp, err := c.PostForm(u, form)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	return resp.Header.Get("Location"), resp.StatusCode
+}
+
+// mnemonicWordsOf 从抽查页里按顺序取出助记词（页面上是编号网格）。
+func mnemonicWordsOf(t *testing.T, page string) []string {
+	t.Helper()
+	m := regexp.MustCompile(`<span class="w">([^<]+)</span>`).FindAllStringSubmatch(page, -1)
+	if len(m) == 0 {
+		t.Fatalf("抽查页没有助记词:\n%s", page)
+	}
+	out := make([]string, len(m))
+	for i, g := range m {
+		out[i] = strings.TrimSpace(g[1])
+	}
+	return out
+}
+
+// promptIndexesOf 从抽查页里取出要复述的序号。
+func promptIndexesOf(t *testing.T, page string) []int {
+	t.Helper()
+	m := regexp.MustCompile(`第\s*(\d+)\s*个词`).FindAllStringSubmatch(page, -1)
+	if len(m) == 0 {
+		t.Fatalf("抽查页没有复述提示:\n%s", page)
+	}
+	out := make([]int, len(m))
+	for i, g := range m {
+		n, err := strconv.Atoi(g[1])
+		if err != nil {
+			t.Fatal(err)
+		}
+		out[i] = n
+	}
+	return out
+}
+
+// tokenOf 取出抽查页地址里的待确认凭据。
+func tokenOf(t *testing.T, loc string) string {
+	t.Helper()
+	u, err := url.Parse(loc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := u.Query().Get("token")
+	if token == "" {
+		t.Fatalf("抽查页地址没有 token: %s", loc)
+	}
+	return token
+}
+
+// waitLocked 等到服务真的回到锁定态（锁定是异步的）。
+func waitLocked(t *testing.T, base string) {
+	t.Helper()
+	for i := 0; i < 100; i++ {
+		if strings.Contains(desktopGet(t, base), `action="/login"`) {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("等待锁定超时：登录页始终没出现")
+}
+
+// fileExists 判断文件是否存在。
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }

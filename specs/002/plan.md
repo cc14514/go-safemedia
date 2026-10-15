@@ -195,7 +195,51 @@ Unlock   func(accountID, password string) (...)      // 取代原 func(password)
 
 **文案精简（AC8.6）**：登录页删除 `hint` / `redline` 段落，只留 标题 / 库根 / 账户列表 / 口令 / 解锁按钮 / 失败原因；索引页删除「条目只显示密档文件名…」与脚注；播放页删除环回说明句（保留目录树操作提示）。红线提示仍在 `account create` 输出与文档中（宪法 III 不要求页面展示）。
 
-**风险**：R6 账户列表是**启动时快照**（运行中新增账户要重启）——记入 Scope「不含」，与库根扫描同口径。
+**风险**：R6 账户列表在登录页是**启动时快照**（运行中新增账户要重启才出现在登录页）——与库根扫描同口径；**账户管理页每次渲染重新发现**（AC9.1），因此管理动作后立刻可见。
+
+## 16. 账户管理（US9：引擎侧页面 + 外壳侧命令层）
+
+**包边界不破**：`internal/play` 依然**不 import `internal/account`**。管理动作以**注入式接口**交给调用方（外壳），引擎只负责页面、状态机与门控——与 `Unlock` / `Accounts` 的做法一致：
+
+```go
+// internal/play：只用字符串，不引用账户类型
+type AccountsAdmin interface {
+    List() []AccountOption                                                  // 每次渲染重新发现（AC9.1）
+    DefaultTargetName() string                                             // 无账户时=默认账户文件名（AC9.4）
+    Create(req AccountCreateRequest) (AccountOption, string /*助记词*/, error)
+    ConfirmMnemonicAndSave(token, answers string) (AccountOption, error)     // 复述抽查通过才写盘（AC9.2/9.3）
+    RecoverFromMnemonic(req AccountRecoverRequest) (AccountOption, error)
+    RecoverFromRecoveryFile(req AccountRecoverRequest) (AccountOption, error)
+    Delete(path, password string) error                                     // 口令授权 + 移入回收目录（AC9.8/9.9）
+}
+```
+
+实现落在 `internal/desktopcfg`（该包已 import `internal/account`，且已持有数据目录与发现逻辑）：`CreateAccount` / `RecoverAccountFromMnemonic` / `RecoverAccountFromRecoveryFile` / `DeleteAccount` / `ValidateAccountName` / `AccountTargetPath`。scryptN 由调用方注入（生产 `account.DefaultScryptN`，测试 `1<<10`）。
+
+**路由与状态表**（全部**仅锁定态**，AC9.10；已解锁访问 → 303 到 `/`）：
+
+| 路由 | 方法 | 行为 |
+|---|---|---|
+| `/accounts` | GET | 账户列表（名称 + 短地址 + 是否配置指定）+ 入口（创建 / 恢复 / 删除）；空列表显示创建入口 |
+| `/accounts/create` | GET | 表单：名称（无账户时固定为默认账户名）+ 口令 + 二次确认 |
+| `/accounts/create` | POST | 校验名称与口令 → 生成账户 → **保留待确认状态**（随机 token，内存，含助记词）→ 渲染助记词页（编号网格 + 3 个抽查序号，无复制按钮） |
+| `/accounts/create/confirm` | POST | 抽查答案全对 → 写 keystore → 303 到 `/accounts`（成功提示）；任一错 → 重绘助记词页并提示（**不写盘**，AC9.3） |
+| `/accounts/create/cancel` | POST | 丢弃待确认状态（不写盘），回 `/accounts` |
+| `/accounts/recover` | GET/POST | 二选一：`from=mnemonic`（助记词 + 名称 + 新口令）/ `from=recovery`（恢复文件路径 + 恢复口令 + 新口令）→ 写盘（已存在则先 `.bak`）→ 303 |
+| `/accounts/delete` | POST | `path` + `password`：口令正确且路径合法 → 移入回收目录 → 303（AC9.8/9.9） |
+
+**待确认的助记词状态**（AC9.12）：`pending{token, name, account, mnemonic, answers, tries}` 只存在内存；确认/取消/失败超限/锁定/`Close()` 时清零并从 map 删除；抽查答案用 `crypto/rand` 生成（12 词抽 3）；答案逐词比较（与 CLI `ConfirmMnemonic` 同语义）；**页面 `no-store`、无复制按钮、绝不写日志**。
+
+**目标路径策略**（AC9.4，拒覆盖）：
+- 无任何账户 → `<数据目录>/keystore.json`（与 CLI 默认账户一致，使 `safemedia seal` 立刻可用）；
+- 已有账户 → `<数据目录>/accounts/<名称>.json`；
+- 名称校验：非空、≤64、无路径分隔符 / `..` / 控制字符、不以 `.` 开头、补 `.json`、**目标不存在**。
+
+**删除**（AC9.8/9.9）：路径必须 ∈ 发现列表 **且** 在数据目录内（`cfg.Account` 指向外部 → 拒绝并提示手动处理）；口令经 `LoadKeystoreWithPassphrase` 验证（错 → 不删）；移动目标 `<数据目录>/trash/<时间戳>-<名称>`（同文件系统 `os.Rename`，冲突则加序号）；页面明确「可还原」「该账户封的密档将永久无法启封，密档文件本身保留」。删的是**账户文件**，绝不触碰任何密档。
+
+**配置同步**（AC9.11）：外壳在删除后若发现 `desktop.json` 的 `account` 指向被删文件（或该文件已不存在），清空该字段并落盘（保留 `library`）。
+
+**风险**：R7 管理动作由页面触发，误操作面比 CLI 大——缓解＝删除需口令 + 回收目录 + 明确后果文案 + 锁定态专属；R8 助记词进入 DOM——缓解＝无复制按钮、`no-store`、待确认态短生命周期、离开即清（不落盘已由 NFR-5/AC4.1 的缓存对照实验覆盖）。
 
 ## 15. 评审门
 

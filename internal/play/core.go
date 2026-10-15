@@ -42,7 +42,8 @@ type coreConfig struct {
 	softLock    bool   // true = 锁定时不关停服务，回到登录页（桌面外壳）
 	mediaPrefix string // 媒体路由前缀（锁定态下对该前缀返回 403 而非登录页）
 	target      string // 登录页展示的目标描述
-	accounts    []AccountOption
+	accountsFn  func() []AccountOption
+	admin       AccountsAdmin
 	unlockFn    func(accountID, password string) error
 	session     string // 非空 → 解锁后内容路由要求该会话 cookie
 	preUnlocked bool   // 构造时已持有密钥（CLI/测试路径）
@@ -58,7 +59,8 @@ type core struct {
 	softLock    bool
 	mediaPrefix string
 	target      string
-	accounts    []AccountOption
+	accountsFn  func() []AccountOption
+	admin       AccountsAdmin
 	unlockFn    func(accountID, password string) error
 	session     string
 
@@ -66,6 +68,10 @@ type core struct {
 	// sel（US8 上次提交的账户 —— 校验失败重绘时必须保持选中）。
 	loginMu sync.RWMutex
 	sel     string
+
+	// accMu 保护账户管理的展示副本（US9 待确认创建的助记词与抽查序号）。
+	accMu      sync.Mutex
+	challenges map[string]challengeEntry
 
 	last     atomic.Int64 // 最近一次请求时间（UnixNano）
 	locked   atomic.Bool  // 密钥已清零（需要再次解锁）
@@ -93,9 +99,11 @@ func newCore(cfg coreConfig) *core {
 		softLock:    cfg.softLock,
 		mediaPrefix: cfg.mediaPrefix,
 		target:      cfg.target,
-		accounts:    cfg.accounts,
+		accountsFn:  cfg.accountsFn,
+		admin:       cfg.admin,
 		unlockFn:    cfg.unlockFn,
 		session:     cfg.session,
+		challenges:  map[string]challengeEntry{},
 	}
 	c.unlocked.Store(cfg.preUnlocked)
 	c.locked.Store(!cfg.preUnlocked)
@@ -246,6 +254,11 @@ func (c *core) gate(content http.Handler) http.Handler {
 			c.handleLogin(w, r)
 			return
 		}
+		// 账户管理（US9）：只在锁定态可用；解锁后一律回索引页（AC9.10）。
+		if r.URL.Path == "/accounts" || strings.HasPrefix(r.URL.Path, "/accounts/") {
+			c.handleAccounts(w, r)
+			return
+		}
 		if !c.unlocked.Load() {
 			// 锁定态：内容一律不可见（AC1.6：媒体地址被拒绝且不 panic）
 			if c.isMediaPath(r.URL.Path) {
@@ -276,25 +289,35 @@ func (c *core) sessionOK(r *http.Request) bool {
 	return err == nil && ck.Value == c.session
 }
 
+// accountList 返回当前可选的账户列表（AC9.1：每次渲染重新发现，管理动作后立刻可见）。
+func (c *core) accountList() []AccountOption {
+	if c.accountsFn == nil {
+		return nil
+	}
+	return c.accountsFn()
+}
+
 // renderLogin 输出登录页（不再缓存）。
 func (c *core) renderLogin(w http.ResponseWriter, errMsg string) {
 	writeNoCacheHeaders(w)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	sel := c.loginSel()
-	if _, ok := findAccount(c.accounts, sel); !ok {
+	list := c.accountList()
+	if _, ok := findAccount(list, sel); !ok {
 		// 没选过、或上次提交的标识已不在列表（例如被篡改）→ 回到首项，
 		// 使「默认选中第一项」在标记里也显式成立（AC8.1）。
-		if len(c.accounts) > 0 {
-			sel = c.accounts[0].ID
+		if len(list) > 0 {
+			sel = list[0].ID
 		} else {
 			sel = ""
 		}
 	}
 	fmt.Fprint(w, loginPage(loginView{
-		Target:   c.loginTarget(),
-		Err:      errMsg,
-		Accounts: c.accounts,
-		Selected: sel,
+		Target:      c.loginTarget(),
+		Err:         errMsg,
+		Accounts:    list,
+		Selected:    sel,
+		ManageItems: c.admin != nil,
 	}))
 }
 
@@ -319,8 +342,9 @@ func (c *core) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// ① 账户标识必须来自注入的列表，且校验发生在解锁回调之前：
 	//    被篡改的标识根本不会触达「按该标识读 keystore」的逻辑（AC8.4）。
 	accountID := r.PostFormValue("account")
-	if len(c.accounts) > 0 {
-		if _, ok := findAccount(c.accounts, accountID); !ok {
+	list := c.accountList()
+	if len(list) > 0 {
+		if _, ok := findAccount(list, accountID); !ok {
 			c.setLoginSel(accountID)
 			c.renderLogin(w, "请选择一个可用账户")
 			return

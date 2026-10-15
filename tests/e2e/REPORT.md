@@ -1,51 +1,63 @@
 # go-safemedia — L3 E2E 报告（001 密档播放 · 002 桌面外壳）
 
-- 生成时间：2026-10-15 20:42:43 CST
+- 生成时间：2026-10-15 22:12:07 CST
 - 运行环境：darwin/arm64 · go1.26.0
 - 系统版本：macOS 27.0.1
-- 被测二进制：`/var/folders/39/jgrn4s4n59n7y2_4srwlcn8w0000gn/T/TestE2E_TamperDetected4081797973/001/safemedia`（sha256 `751a201d92007efb`）
-- 样本：synthetic.mp4(合成, 262144 B)
-- 判定：**23 PASS / 0 FAIL**（L3 必须全 PASS 才能交付 QA）
+- 被测二进制：`/var/folders/39/jgrn4s4n59n7y2_4srwlcn8w0000gn/T/TestE2E_TamperDetected2795641178/001/safemedia`（sha256 `f5de799936e1614f`）
+- 样本：Big_Buck_Bunny_360_10s_1MB.mp4(真实, 295327 B), Big_Buck_Bunny_360_10s_1MB.webm(真实, 6687499 B), bbb_qt.mov(真实, 295327 B, 由 Big_Buck_Bunny_360_10s_1MB.mp4 重标 ftyp brand 生成)
+- 判定：**35 PASS / 0 FAIL**（L3 必须全 PASS 才能交付 QA）
 
 ## Pre/Post 对比
 
 | # | 场景 | 期望（Pre） | 实测（Post） | 证据 | 判定 |
 |---|------|------------|-------------|------|------|
-| 1 | 退出码 0（成功） | safemedia version 退出码 = 0 | 退出码=0 | /var/folders/39/jgrn4s4n59n7y2_4srwlcn8w0000gn/T/TestE2E_ExitCodes2139832142/001/safemedia version | **PASS** |
-| 2 | 退出码 1（用户错误：口令错） | 错误口令时退出码 = 1 且不启动服务 | 退出码=1；输出=输入登录口令: ✗ 口令错误或 keystore 已损坏 | /var/folders/39/jgrn4s4n59n7y2_4srwlcn8w0000gn/T/TestE2E_ExitCodes2139832142/001/safemedia play <vault> --no-browser | **PASS** |
-| 3 | 退出码 2（数据错误：头部损坏） | magic 被破坏时退出码 = 2 | 退出码=2；输出=输入登录口令: ✗ 不是密档文件或头部已损坏 | /var/folders/39/jgrn4s4n59n7y2_4srwlcn8w0000gn/T/TestE2E_ExitCodes2139832142/001/safemedia play <损坏密档> --no-browser | **PASS** |
-| 4 | 退出码 3（环境错误：mpv 缺失） | 指定 --player mpv 而本机无 mpv 时退出码 = 3 | 退出码=3；输出=输入登录口令: ✗ 未检测到 mpv：请先安装 mpv，或改用浏览器模式（去掉 --player mpv） | /var/folders/39/jgrn4s4n59n7y2_4srwlcn8w0000gn/T/TestE2E_ExitCodes2139832142/001/safemedia play <vault> --player mpv | **PASS** |
-| 5 | AC4.5 播不动即提示（合成样本，无头 Chrome） | 非可解码流 → 页面显示「改用 --player mpv」提示 | data-decode=failed；<video> 存在=true；mpv 提示可见=true | chrome --headless --dump-dom | **PASS** |
-| 6 | NFR-1 封存吞吐（32 MiB，AES-256-GCM 分块加密） | ≥100 MB/s（AES-NI；远高于本机 SSD 顺序读，加密不是瓶颈） | 封存 2263 MB/s；同机顺序读（页缓存，RAM 基线）7359 MB/s，比值 31%（该基线是内存速度，偏低属正常） | go test -bench=BenchmarkSeal32MiB ./internal/vault | **PASS** |
-| 7 | L1+L2 回归（unit + integration） | 同一源码上 go test ./internal/... ./tests/integration/ 全绿 | 包级结果 8 ok / 0 fail；命令 err=false | go test -count=1 ./internal/... ./cmd/... ./tests/integration/... | **PASS** |
-| 8 | AC5.4 目录树索引（递归含子目录） | 索引页列出子目录中的密档，并按目录树（<details>）分组 | 库内 1 个密档（子目录 false）；解析到条目链接 1 个；目录分组=false | GET / 索引页 + 链接解析 | **PASS** |
-| 9 | AC5.5 播放页左侧常驻目录树 | 播放页左侧显示整库目录树、当前条目高亮，其它条目可直接点击切换 | 页面 8024 B；<aside> 存在=true；当前条目高亮=true；1 个条目链接齐全=true | GET /watch/<token> | **PASS** |
-| 10 | AC5.5 侧栏切换片源 | 两个不同子目录的条目各自取流，内容与原文一致 | 选中 synthetic.mp4.svid → 262144 B 一致=true；切换 synthetic.mp4.svid → 一致=true | GET /watch + /media（两条条目） | **PASS** |
-| 11 | AC5.5 侧栏选中条目真实解码（合成，无头 Chrome） | 经目录树选中的条目在浏览器里真实解码（合成样本则显示 mpv 提示） | data-decode=failed（对照原文件=跳过）；<video> 存在=true；mpv 提示=true | chrome --headless --dump-dom（密档流 vs 原文件对照） | **PASS** |
-| 12 | AC8.1 目录树会话锁定 | 侧栏模式 POST /lock → 清零密钥、进程退出、端口关闭 | lock 状态 200；进程退出 err=<nil>；端口已关闭=true；耗时 0.03s | POST /lock + 进程退出 + 端口探测 | **PASS** |
-| 13 | US1 账户创建（account create，黑盒） | 12 词助记词 + 精确复述抽查 + keystore(0600) + 输出地址 | 助记词 12 词；地址 0x0Ca6a6ecf09ABC023766a0da7534436b5ed5bac5；keystore 605 B 权限 0600；耗时 0.6s | account create（含抽查复述） | **PASS** |
-| 14 | US3 封存 synthetic.mp4（合成样本） | 不转码（体积=明文+固定开销）；无明文/文件名残留；原文件不变；0600 | 明文 262144 B → 密档 262328 B（开销 184 B）；耗时 0.25s；原文件不变=true；无明文片段=true 无文件名=true | ✓ synthetic.mp4.svid 容器=mp4 明文=256.0 KiB 块数=1  +0.1% | **PASS** |
-| 15 | US4 播放 synthetic.mp4（127.0.0.1 环回） | 播放页含 <video> 与 mpv 提示；全量解密流与原文逐字节一致；禁缓存 | 页面 7606 B；流 262144 B 一致=true；Content-Type=video/mp4；Cache-Control=no-store, no-cache, must-revalidate, private | GET /media/<token> | **PASS** |
-| 16 | AC4.2 seek synthetic.mp4（中段 Range） | 任意位置 Range → 206，内容正确，首字节 < 1s | bytes=98304-163839 → 206 状态 206，65536 B，耗时 0 ms | HTTP Range 单请求 | **PASS** |
-| 17 | AC8.3 播放零明文残留 synthetic.mp4 | 解密只在内存；播放期间不新增磁盘文件、进程不打开明文视频 | 播放期间未新增任何文件 | 目录快照对比 + lsof -p <pid> | **PASS** |
-| 18 | AC8.1 锁定并退出 synthetic.mp4 | POST /lock → 清零密钥、进程退出、端口关闭 | lock 状态 200；进程退出 err=<nil>；端口已关闭=true | POST /lock + 进程退出 + 端口探测 | **PASS** |
-| 19 | US2 助记词重建（黑盒 recover） | 用 12 词助记词重建账户，地址与原账户一致 | 原地址 0x4dE7888104F155ac327c343F4cE073A523aEAf4C → 新地址 0x4dE7888104F155ac327c343F4cE073A523aEAf4C（一致=true）；keystore 重新生成=true | account recover --from-mnemonic | **PASS** |
-| 20 | US2 重建后启封旧密档 | 公钥未变 → 旧密档无需重新封存即可播放 | 旧密档 204984 B 密文 → 204800 B 明文，逐字节一致=true | play（重建账户 + 旧密档） | **PASS** |
-| 21 | AC1.1 复述失败即中止（黑盒） | 抽查答错 → 报错退出，且不写出 keystore | 退出 err=true；keystore 存在=false | account create（故意答错） | **PASS** |
-| 22 | AC4.6 头部损坏 = 不是密档（黑盒） | magic 被改 → 明确报「不是密档文件或头部已损坏」，不启动服务 | 退出 err=true；输出含「不是密档」=true | play（篡改 magic） | **PASS** |
-| 23 | AC4.4 数据块篡改（黑盒） | 被改块报完整性失败；进程不崩溃，播放页仍可访问 | 媒体请求被拒=true（reqErr=<nil>，状态=500）；播放页仍 200=true | GET 中段 Range（篡改块） | **PASS** |
+| 1 | 退出码 0（成功） | safemedia version 退出码 = 0 | 退出码=0 | /var/folders/39/jgrn4s4n59n7y2_4srwlcn8w0000gn/T/TestE2E_ExitCodes2518536876/001/safemedia version | **PASS** |
+| 2 | 退出码 1（用户错误：口令错） | 错误口令时退出码 = 1 且不启动服务 | 退出码=1；输出=输入登录口令: ✗ 口令错误或 keystore 已损坏 | /var/folders/39/jgrn4s4n59n7y2_4srwlcn8w0000gn/T/TestE2E_ExitCodes2518536876/001/safemedia play <vault> --no-browser | **PASS** |
+| 3 | 退出码 2（数据错误：头部损坏） | magic 被破坏时退出码 = 2 | 退出码=2；输出=输入登录口令: ✗ 不是密档文件或头部已损坏 | /var/folders/39/jgrn4s4n59n7y2_4srwlcn8w0000gn/T/TestE2E_ExitCodes2518536876/001/safemedia play <损坏密档> --no-browser | **PASS** |
+| 4 | 退出码 3（环境错误：mpv 缺失） | 指定 --player mpv 而本机无 mpv 时退出码 = 3 | 退出码=3；输出=输入登录口令: ✗ 未检测到 mpv：请先安装 mpv，或改用浏览器模式（去掉 --player mpv） | /var/folders/39/jgrn4s4n59n7y2_4srwlcn8w0000gn/T/TestE2E_ExitCodes2518536876/001/safemedia play <vault> --player mpv | **PASS** |
+| 5 | AC4.5 浏览器解码 Big_Buck_Bunny_360_10s_1MB.mp4（真实，无头 Chrome） | 真实视频经密档解密后进入播放状态（对照：原文件 playing） | 密档流 data-decode=playing；原文件 data-decode=playing；媒体流与原文逐字节一致（见 US4 行） | chrome --headless --dump-dom（密档流 vs 原文件对照） | **PASS** |
+| 6 | AC4.5 浏览器解码 Big_Buck_Bunny_360_10s_1MB.webm（真实，无头 Chrome） | 真实视频经密档解密后进入播放状态（对照：原文件 playing） | 密档流 data-decode=playing；原文件 data-decode=playing；媒体流与原文逐字节一致（见 US4 行） | chrome --headless --dump-dom（密档流 vs 原文件对照） | **PASS** |
+| 7 | AC4.5 浏览器解码 bbb_qt.mov（真实，无头 Chrome） | 真实视频经密档解密后进入播放状态（对照：原文件 playing） | 密档流 data-decode=playing；原文件 data-decode=playing；媒体流与原文逐字节一致（见 US4 行） | chrome --headless --dump-dom（密档流 vs 原文件对照） | **PASS** |
+| 8 | NFR-1 封存吞吐（32 MiB，AES-256-GCM 分块加密） | ≥100 MB/s（AES-NI；远高于本机 SSD 顺序读，加密不是瓶颈） | 封存 1856 MB/s；同机顺序读（页缓存，RAM 基线）7572 MB/s，比值 25%（该基线是内存速度，偏低属正常） | go test -bench=BenchmarkSeal32MiB ./internal/vault | **PASS** |
+| 9 | L1+L2 回归（unit + integration） | 同一源码上 go test ./internal/... ./tests/integration/ 全绿 | 包级结果 8 ok / 0 fail；命令 err=false | go test -count=1 ./internal/... ./cmd/... ./tests/integration/... | **PASS** |
+| 10 | AC5.4 目录树索引（递归含子目录） | 索引页列出子目录中的密档，并按目录树（<details>）分组 | 库内 3 个密档（子目录 true）；解析到条目链接 3 个；目录分组=true | GET / 索引页 + 链接解析 | **PASS** |
+| 11 | AC5.5 播放页左侧常驻目录树 | 播放页左侧显示整库目录树、当前条目高亮，其它条目可直接点击切换 | 页面 8490 B；<aside> 存在=true；当前条目高亮=true；3 个条目链接齐全=true | GET /watch/<token> | **PASS** |
+| 12 | AC5.5 侧栏切换片源 | 两个不同子目录的条目各自取流，内容与原文一致 | 选中 season1/bbb_qt.mov.svid → 295327 B 一致=true；切换 Big_Buck_Bunny_360_10s_1MB.mp4.svid → 一致=true | GET /watch + /media（两条条目） | **PASS** |
+| 13 | AC5.5 侧栏选中条目真实解码（真实，无头 Chrome） | 经目录树选中的条目在浏览器里真实解码（合成样本则显示 mpv 提示） | data-decode=playing（对照原文件=playing）；<video> 存在=true；mpv 提示=true | chrome --headless --dump-dom（密档流 vs 原文件对照） | **PASS** |
+| 14 | AC8.1 目录树会话锁定 | 侧栏模式 POST /lock → 清零密钥、进程退出、端口关闭 | lock 状态 200；进程退出 err=<nil>；端口已关闭=true；耗时 0.20s | POST /lock + 进程退出 + 端口探测 | **PASS** |
+| 15 | US1 账户创建（account create，黑盒） | 12 词助记词 + 精确复述抽查 + keystore(0600) + 输出地址 | 助记词 12 词；地址 0xd29291f3B4Cb2C891e955B23Bc91eE3eb402a9a2；keystore 605 B 权限 0600；耗时 0.7s | account create（含抽查复述） | **PASS** |
+| 16 | US3 封存 Big_Buck_Bunny_360_10s_1MB.mp4（真实样本） | 不转码（体积=明文+固定开销）；无明文/文件名残留；原文件不变；0600 | 明文 295327 B → 密档 295511 B（开销 184 B）；耗时 0.26s；原文件不变=true；无明文片段=true 无文件名=true | ✓ Big_Buck_Bunny_360_10s_1MB.mp4.svid 容器=mp4 明文=288.4 KiB 块数=1  +0.1% | **PASS** |
+| 17 | US4 播放 Big_Buck_Bunny_360_10s_1MB.mp4（127.0.0.1 环回） | 播放页含 <video> 与 mpv 提示；全量解密流与原文逐字节一致；禁缓存 | 页面 7657 B；流 295327 B 一致=true；Content-Type=video/mp4；Cache-Control=no-store, no-cache, must-revalidate, private | GET /media/<token> | **PASS** |
+| 18 | AC4.2 seek Big_Buck_Bunny_360_10s_1MB.mp4（中段 Range） | 任意位置 Range → 206，内容正确，首字节 < 1s | bytes=114895-180430 → 206 状态 206，65536 B，耗时 0 ms | HTTP Range 单请求 | **PASS** |
+| 19 | AC8.3 播放零明文残留 Big_Buck_Bunny_360_10s_1MB.mp4 | 解密只在内存；播放期间不新增磁盘文件、进程不打开明文视频 | 播放期间未新增任何文件 | 目录快照对比 + lsof -p <pid> | **PASS** |
+| 20 | AC8.1 锁定并退出 Big_Buck_Bunny_360_10s_1MB.mp4 | POST /lock → 清零密钥、进程退出、端口关闭 | lock 状态 200；进程退出 err=<nil>；端口已关闭=true | POST /lock + 进程退出 + 端口探测 | **PASS** |
+| 21 | US3 封存 Big_Buck_Bunny_360_10s_1MB.webm（真实样本） | 不转码（体积=明文+固定开销）；无明文/文件名残留；原文件不变；0600 | 明文 6687499 B → 密档 6687711 B（开销 212 B）；耗时 0.29s；原文件不变=true；无明文片段=true 无文件名=true | ✓ Big_Buck_Bunny_360_10s_1MB.webm.svid 容器=webm 明文=6.4 MiB 块数=2  +0.0% | **PASS** |
+| 22 | US4 播放 Big_Buck_Bunny_360_10s_1MB.webm（127.0.0.1 环回） | 播放页含 <video> 与 mpv 提示；全量解密流与原文逐字节一致；禁缓存 | 页面 7660 B；流 6687499 B 一致=true；Content-Type=video/webm；Cache-Control=no-store, no-cache, must-revalidate, private | GET /media/<token> | **PASS** |
+| 23 | AC4.2 seek Big_Buck_Bunny_360_10s_1MB.webm（中段 Range） | 任意位置 Range → 206，内容正确，首字节 < 1s | bytes=3310981-3376516 → 206 状态 206，65536 B，耗时 11 ms | HTTP Range 单请求 | **PASS** |
+| 24 | AC8.3 播放零明文残留 Big_Buck_Bunny_360_10s_1MB.webm | 解密只在内存；播放期间不新增磁盘文件、进程不打开明文视频 | 播放期间未新增任何文件 | 目录快照对比 + lsof -p <pid> | **PASS** |
+| 25 | AC8.1 锁定并退出 Big_Buck_Bunny_360_10s_1MB.webm | POST /lock → 清零密钥、进程退出、端口关闭 | lock 状态 200；进程退出 err=<nil>；端口已关闭=true | POST /lock + 进程退出 + 端口探测 | **PASS** |
+| 26 | US3 封存 bbb_qt.mov（真实样本） | 不转码（体积=明文+固定开销）；无明文/文件名残留；原文件不变；0600 | 明文 295327 B → 密档 295511 B（开销 184 B）；耗时 0.28s；原文件不变=true；无明文片段=true 无文件名=true | ✓ bbb_qt.mov.svid 容器=mov 明文=288.4 KiB 块数=1  +0.1% | **PASS** |
+| 27 | US4 播放 bbb_qt.mov（127.0.0.1 环回） | 播放页含 <video> 与 mpv 提示；全量解密流与原文逐字节一致；禁缓存 | 页面 7597 B；流 295327 B 一致=true；Content-Type=video/quicktime；Cache-Control=no-store, no-cache, must-revalidate, private | GET /media/<token> | **PASS** |
+| 28 | AC4.2 seek bbb_qt.mov（中段 Range） | 任意位置 Range → 206，内容正确，首字节 < 1s | bytes=114895-180430 → 206 状态 206，65536 B，耗时 0 ms | HTTP Range 单请求 | **PASS** |
+| 29 | AC8.3 播放零明文残留 bbb_qt.mov | 解密只在内存；播放期间不新增磁盘文件、进程不打开明文视频 | 播放期间未新增任何文件 | 目录快照对比 + lsof -p <pid> | **PASS** |
+| 30 | AC8.1 锁定并退出 bbb_qt.mov | POST /lock → 清零密钥、进程退出、端口关闭 | lock 状态 200；进程退出 err=<nil>；端口已关闭=true | POST /lock + 进程退出 + 端口探测 | **PASS** |
+| 31 | US2 助记词重建（黑盒 recover） | 用 12 词助记词重建账户，地址与原账户一致 | 原地址 0xE85E6004a08FD56bb38BBaCA0cd56Bfd52178E79 → 新地址 0xE85E6004a08FD56bb38BBaCA0cd56Bfd52178E79（一致=true）；keystore 重新生成=true | account recover --from-mnemonic | **PASS** |
+| 32 | US2 重建后启封旧密档 | 公钥未变 → 旧密档无需重新封存即可播放 | 旧密档 204984 B 密文 → 204800 B 明文，逐字节一致=true | play（重建账户 + 旧密档） | **PASS** |
+| 33 | AC1.1 复述失败即中止（黑盒） | 抽查答错 → 报错退出，且不写出 keystore | 退出 err=true；keystore 存在=false | account create（故意答错） | **PASS** |
+| 34 | AC4.6 头部损坏 = 不是密档（黑盒） | magic 被改 → 明确报「不是密档文件或头部已损坏」，不启动服务 | 退出 err=true；输出含「不是密档」=true | play（篡改 magic） | **PASS** |
+| 35 | AC4.4 数据块篡改（黑盒） | 被改块报完整性失败；进程不崩溃，播放页仍可访问 | 媒体请求被拒=true（reqErr=<nil>，状态=500）；播放页仍 200=true | GET 中段 Range（篡改块） | **PASS** |
 
 ## L1 / L2 回归（同一源码）
 
 ```
-ok  	github.com/cc14514/go-safemedia/internal/account	0.418s
-ok  	github.com/cc14514/go-safemedia/internal/cli	0.149s
-ok  	github.com/cc14514/go-safemedia/internal/desktopcfg	0.381s
-ok  	github.com/cc14514/go-safemedia/internal/play	0.569s
-ok  	github.com/cc14514/go-safemedia/internal/vault	0.163s
-ok  	github.com/cc14514/go-safemedia/internal/version	0.302s
+ok  	github.com/cc14514/go-safemedia/internal/account	0.438s
+ok  	github.com/cc14514/go-safemedia/internal/cli	0.352s
+ok  	github.com/cc14514/go-safemedia/internal/desktopcfg	0.498s
+ok  	github.com/cc14514/go-safemedia/internal/play	0.630s
+ok  	github.com/cc14514/go-safemedia/internal/vault	0.174s
+ok  	github.com/cc14514/go-safemedia/internal/version	0.320s
 ?   	github.com/cc14514/go-safemedia/cmd/safemedia	[no test files]
-ok  	github.com/cc14514/go-safemedia/tests/integration	1.933s
+ok  	github.com/cc14514/go-safemedia/tests/integration	2.152s
 ```
 
 ## 002 桌面外壳（Desktop Shell）
@@ -63,6 +75,7 @@ ok  	github.com/cc14514/go-safemedia/tests/integration	1.933s
 | 7 | 一条命令出产物（AC5.1） | `make dist` 产出含 `.app` + CLI 的 zip | `dist/safemedia_<ver>_darwin-arm64.zip`（~12MB），内含 `safemedia.app`、`safemedia`、`说明.txt` | `make dist` + `unzip -l` | **PASS** |
 | 8 | 页面内换库根（US7，AC7.1–7.8） | 索引页可进目录选择页、选定后立即重扫并按子目录展示、非法路径不改动状态、锁定态不可枚举目录 | 选择页列出子目录与直含密档数；`POST /library` → 303 + 索引页新树；非法路径 200 页面内提示且库根不变；锁定态 `/library` 回登录页 | `internal/play/picker_test.go`（L1）+ `tests/integration/picker_flow_test.go`（L2）+ `desktop/main_test.go`（持久化） | **PASS** |
 | 9 | 登录页选账户（US8，AC8.1–8.7） | 列出本机账户并要求**选对**才能解锁；列表外标识在解密前被拒；页面无说明性段落 | 登录页 `<select>` 列出 `keystore.json` / `accounts/work.json`（名 + 地址短形式）、首项默认选中；选错账户 → 「口令错误或与所选账户不匹配」且无会话、重绘保持选中；伪造标识 → 「请选择一个可用账户」且解锁回调 0 次调用；无账户 → 提示 `safemedia account create`；页面文案守护（无「明文不落盘」等段落） | `internal/account`、`internal/desktopcfg`、`internal/play/accounts_test.go`、`page_style_test.go`（L1）+ `tests/integration/desktop_flow_test.go`、`desktop/main_test.go` | **PASS** |
+| 10 | app 内账户管理（US9，AC9.1–9.12） | 创建（助记词抄写+抽查后才落盘）/ 恢复（助记词、恢复文件）/ 删除（口令授权、文件进回收目录）；仅锁定态可用 | 锁定态：`/accounts` 列表可进创建/恢复/删除；创建 → 助记词页（编号网格 + 3 处抽查，**无复制按钮**）→ 抽查失败留在本页且实现侧 0 次写盘 → 通过后 303 且新账户立刻出现在登录页并**能用它登录**；删除需该账户口令（错口令 0 改动）→ 文件移入 `~/.safemedia/trash/`、`desktop.json` 的 `account` 清空；解锁后访问 `/accounts` → 303 回索引页；`AccountsAdmin` 为空 → 404（CLI 形态） | `internal/desktopcfg/accounts_admin_test.go`、`internal/play/accounts_admin_page_test.go`、`page_style_test.go`（L1）+ `desktop/main_test.go` 的 `TestDesktopAccountManagementEndToEnd`（L2，进程内全链路） | **PASS** |
 
 ### 缓存对照实验（AC4.1 证据）
 

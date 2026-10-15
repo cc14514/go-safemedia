@@ -112,6 +112,29 @@
 - [x] T8.11 文案精简（AC8.6）：登录页删 `hint`/`redline` 段落；索引页删「条目只显示密档文件名…」与脚注；播放页删环回说明句（目录树操作提示保留）。
 - [x] T8.12 文档：`README.md` / `docs/manual.md`（多账户登录、`accounts/` 归置）、`CONTEXT.md`（新增「账户选择」术语）、`AGENTS.md`（登录页与会话、账户发现、文案红线）、`tests/e2e/REPORT.md`（US8 行）。
 
+## M9 US9 账户管理（登录页入口，仅锁定态）
+
+### 测试（先写）
+
+- [x] T9.1 `internal/desktopcfg/accounts_admin_test.go`：`ValidateAccountName`（空 / 含 `/` / `..` / 控制字符 / 以 `.` 开头 / 超长 / 自动补 `.json`）与 `TargetPath` 策略（**无账户 → `<数据目录>/keystore.json`**；已有账户 → `accounts/<名称>.json`；目标已存在 → 拒绝覆盖）；默认名即「默认账户路径」（AC9.2–AC9.4）。
+- [x] T9.2 同上：`Create` 只生成不写盘（pending 只在内存），**抽查失败 / 取消 / 口令不合格 / 两次口令不一致 → 磁盘零新文件**（`TestCreateAbortPathsWriteNothing`、`TestCreatePendingExpires`、`TestCreateRefusesExistingTarget`；对照 CLI 的 `MnemonicMismatchWritesNothing`）（AC9.3）。
+- [x] T9.3 同上：`Delete` —— 口令错误不删任何文件；正确 → 文件移入 `<数据目录>/trash/<时间戳>-<名称>`（冲突自动加序号，`TestDeleteTrashNameCollision`）；**数据目录外的账户路径 → 拒绝**；不在发现列表 / 不存在 → 拒绝；返回 `WasConfigured`（AC9.8/AC9.9）。
+- [x] T9.4 同上：`RecoverFromMnemonic`（有效助记词 → 地址一致；目标已存在 → 先 `.bak`；无效 → 报错且**不写文件**）；`RecoverFromRecoveryFile`（正确恢复口令 → 新口令可解锁，错误口令 → 不写文件）（AC9.6/AC9.7）。
+- [x] T9.5 `internal/play/accounts_admin_page_test.go`：`/accounts*` **仅锁定态**（已解锁 → 303 `/`，`TestAccountsRoutesLockedOnly`）；`AccountsAdmin == nil` → 404；列表页渲染（名称 + 短地址 + 配置指定标记）；创建 → 助记词页（**编号网格 + 3 个抽查序号**、**无「复制」**）→ 抽查通过 → 303 列表；抽查失败 → 重绘且**实现侧 0 次写盘**（fake admin 计数）；取消 → 丢弃；恢复两种模式；删除 → 口令透传、失败原因回显（AC9.1–9.3/9.8/9.10/9.12）。
+- [x] T9.6 `internal/play/page_style_test.go`（扩充）：`styleFixturePages` 覆盖**全部页面**（含新增的账户列表/创建/助记词/恢复/删除）；`TestRedlineNoticeOnlyWhereSecretsEnter`（红线提示只许出现在创建页与恢复页，助记词页不得出现「复制」）、`TestPagesHaveNoFillerCopy`（红线说明之外仍禁「明文不落盘」等段落）、`TestToolbarAlignsWithContentColumn`（正文列宽只许写 `var(--content)`，防工具栏与正文错位）（AC9.5/AC9.6）。
+- [x] T9.7 先确认 T9.1–T9.6 全红（RED），再写实现；两处变异验证（短路账户校验 / 去掉目录校验）分别让对应用例变红。
+- [x] T9.8 `desktop/main_test.go` 的 `TestDesktopAccountManagementEndToEnd`（进程内全链路，scryptN=1<<10）：锁定态起服务 → `/accounts` → 创建（抽查通过）→ 新账户立刻出现在登录页 → **用新账户登录成功** → 删除（口令授权）→ 文件进 `trash`、列表消失、`desktop.json` 的 `account` 字段清空（AC9.1–9.3/9.8/9.11）。
+- [x] T9.9 `desktop/main_test.go`：外壳接线 —— `Accounts` 提供者**每次渲染重新发现**（`TestDesktopAccountWiring`）；`TestDesktopLoginWithoutAnyAccount` 覆盖零账户时提示用 CLI 建账户。
+
+### 实现
+
+- [x] T9.10 `internal/desktopcfg/accounts_admin.go`：`AccountAdmin`（`NewAccountAdmin`）+ `ValidateAccountName` / `TargetPath` / `DefaultTargetName` / `Create`（生成 + 持有 pending）/ `ConfirmCreate(token, answers)` / `CancelCreate` / `RecoverFromMnemonic` / `RecoverFromRecoveryFile` / `Delete`（口令授权 + trash + `WasConfigured`）；pending 含 mutex、随机 token、抽查序号、尝试次数上限、过期清理。
+- [x] T9.11 `internal/play`：`Accounts func() []AccountOption`（**提供者**，替换静态切片；登录页与管理页共用）；新增 `AccountsAdmin` 接口 + `CreateChallenge`；`core.gate` 增加 `/accounts*` 分支（admin 非空 → 管理路由；已解锁 → 303 `/`；admin 为空 → 404）；handler 落在 `accounts_admin.go`（列表/创建/确认与取消/恢复/删除）。
+- [x] T9.12 `internal/play/page.go`：新增 `accountsCSS` + `accountsTmpl` / `createTmpl` / `mnemonicTmpl` / `recoverTmpl` / `deleteTmpl`（全部复用 `baseCSS` 与原生控件外观；助记词页编号网格；无复制按钮）。
+- [x] T9.13 接线：`desktop/accounts.go`（admin 实现 = 包装 desktopcfg + 删除后清 `desktop.json.account` 并保留 `library`）、`desktop/main.go`（`Accounts` 提供者 = 每次 `desktopcfg.ListAccounts`）；CLI 与既有 `Options.Accounts` 调用点改用提供者（CLI 不接 admin，`/accounts*` → 404）。
+- [x] T9.14 CLI 侧一致性：`account recover` 也先打印红线提示（`internal/cli/account.go` 用 `redlineWarning`；`tests/integration/account_cli_test.go` 断言两条命令都有红线提示）——recover 同样是「用户交出助记词」的高危入口（AC9.5）。
+- [x] T9.15 文档：`README.md` / `docs/manual.md`（账户管理用法与回收目录）、`CONTEXT.md`（术语「账户管理页」）、`AGENTS.md`（结构 + 外壳/账户管理要点 + 文案红线例外）、`tests/e2e/REPORT.md`（US9 行）。
+
 ## 收尾
 
 - [x] T6.1 `make test`（L1+L2）全绿（含 `-race`）。

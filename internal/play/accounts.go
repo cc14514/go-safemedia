@@ -23,3 +23,40 @@ func findAccount(list []AccountOption, id string) (AccountOption, bool) {
 	}
 	return AccountOption{}, false
 }
+
+// AccountsAdmin 是账户管理动作（US9）。
+//
+// 引擎**不实现**账户管理：它只渲染页面、把动作透传给调用方注入的实现
+// （桌面外壳用 internal/desktopcfg；CLI 不注入 → 管理路由 404）。
+// 实现方负责：生成/校验/落盘/移入回收目录，以及清零用过的口令字节。
+// 为 nil 表示本服务不提供账户管理。
+type AccountsAdmin interface {
+	// DefaultTargetName 返回创建时默认的账户名称（无账户时为 keystore.json；已有账户时为空）。
+	DefaultTargetName() string
+	// Create 生成账户并返回复述抽查，**不得写任何文件**。
+	Create(targetName, password string, words int) (CreateChallenge, error)
+	// ConfirmCreate 校验复述抽查，全部正确才写 keystore。
+	ConfirmCreate(token string, answers []string) (AccountOption, error)
+	// CancelCreate 丢弃待确认创建。
+	CancelCreate(token string)
+	// RecoverFromMnemonic 用助记词重建账户。
+	RecoverFromMnemonic(name, mnemonic, password string) (AccountOption, error)
+	// RecoverFromRecoveryFile 用恢复文件重置登录口令。
+	RecoverFromRecoveryFile(name, srcPath, recoveryPassword, newPassword string) (AccountOption, error)
+	// Delete 在口令授权下把账户文件移入回收目录（不删除密档）。
+	Delete(path, password string) (DeleteResult, error)
+}
+
+// CreateChallenge 是「已生成账户、等待复述抽查」的中间态（见 AccountsAdmin.Create）。
+type CreateChallenge struct {
+	Token    string // 待确认凭据
+	Mnemonic string // 助记词（页面上按编号网格展示）
+	Indexes  []int  // 抽查序号（1-based）
+	Path     string // 确认后将写入的路径
+}
+
+// DeleteResult 是删除账户的结果。
+type DeleteResult struct {
+	Trashed       string // 回收目录中的新路径
+	WasConfigured bool   // 被删的正是配置里指定的账户
+}

@@ -224,6 +224,7 @@ const loginSrc = `{{define "login"}}<!doctype html>
   label { display:block; font-size:12.5px; color:var(--dim); margin:0 0 6px;
           user-select:none; -webkit-user-select:none; }
   button.primary { width:100%; margin-top:18px; padding:8px 14px; font-size:13.5px; }
+  a.btn.alt { width:100%; margin-top:10px; }
   .err { margin:0 0 16px; background:#3a1a1a; border:1px solid #7a2a2a; color:#ffb0b0;
          padding:10px 12px; border-radius:8px; font-size:13px; }
   .fld + .fld { margin-top:14px; }
@@ -243,6 +244,7 @@ const loginSrc = `{{define "login"}}<!doctype html>
     <input id="password" name="password" type="password" autofocus autocomplete="current-password" required>
   </div>
   <button class="primary" type="submit">解锁</button>
+  {{if .ManageItems}}<a class="btn alt" href="/accounts">账户管理（创建 / 恢复 / 删除）</a>{{end}}
 </form>
 <script>try { document.getElementById('password').focus(); } catch (e) {}</script>
 </body>
@@ -319,6 +321,328 @@ const librarySrc = `{{define "library"}}<!doctype html>
 </body>
 </html>{{end}}`
 
+// accountsCSS 是账户管理页（US9）的共享样式：只加不删，避免影响既有页面。
+const accountsCSS = `{{define "accountsCSS"}}
+  textarea { -webkit-appearance:none; appearance:none; width:100%; background:var(--field); color:var(--text);
+    border:1px solid #3c3c3f; border-radius:var(--radius); padding:8px 10px; font:inherit;
+    font-family:ui-monospace,"SF Mono",Menlo,monospace; font-size:12.5px; resize:vertical; }
+  textarea:focus { outline:none; border-color:var(--focus); box-shadow:0 0 0 3px #4d8de033; }
+  .notice { margin:0 0 16px; background:#16301a; border:1px solid #2f6b34; color:#bfe9c2;
+    padding:10px 12px; border-radius:8px; font-size:13px; }
+  .warnbox { margin:14px 0 0; background:#33260f; border:1px solid #6d5420; color:#f0d9a8;
+    padding:10px 12px; border-radius:8px; font-size:12.5px; line-height:1.6; }
+  button.danger, a.btn.danger { background:#4a2325; border-color:#7a3336; color:#ffc9c9; }
+  button.danger:hover, a.btn.danger:hover { background:#5a2a2c; }
+  button.danger:active, a.btn.danger:active { background:#3d1c1e; }
+  ul.list { list-style:none; margin:0; padding:0; background:var(--panel); border:1px solid var(--line-soft);
+    border-radius:10px; overflow:hidden; }
+  ul.list li { display:flex; align-items:center; gap:12px; padding:9px 14px; border-top:1px solid #26262a; }
+  ul.list li:first-child { border-top:none; }
+  ul.list .grow { flex:1; min-width:0; }
+  ul.list .nm { font-weight:500; }
+  ul.list .ad { color:var(--dim); font-size:12px; margin-left:8px; }
+  .empty { border:1px dashed var(--line); border-radius:10px; padding:22px; text-align:center;
+    color:var(--dim); font-size:13px; }
+  .card { background:var(--panel); border:1px solid #2e2e31; border-radius:12px;
+    padding:20px 20px 18px; margin:0 0 18px; box-shadow:0 14px 40px rgba(0,0,0,.28); }
+  .card h2 { font-size:13px; font-weight:600; margin:0 0 12px; }
+  .card .sub { color:var(--dim); font-size:12.5px; margin:0 0 14px; word-break:break-all; }
+  .card .note { color:var(--dim); font-size:12px; margin:6px 0 0; line-height:1.5; }
+  .fld + .fld { margin-top:14px; }
+  .actions { display:flex; align-items:center; gap:10px; margin:0; flex-wrap:wrap; }
+  ol.mn { list-style:none; margin:0 0 14px; padding:0; display:grid; grid-template-columns:repeat(4,1fr); gap:6px 10px; }
+  ol.mn li { display:flex; align-items:baseline; gap:8px; background:var(--field); border:1px solid #2c2c2f;
+    border-radius:6px; padding:6px 9px; font-family:ui-monospace,"SF Mono",Menlo,monospace; font-size:12.5px; }
+  ol.mn .i { color:var(--dim); font-size:11px; min-width:14px; text-align:right;
+    user-select:none; -webkit-user-select:none; }
+  ol.mn .w { color:var(--text); user-select:none; -webkit-user-select:none; }
+  ul.pick { list-style:none; margin:0; padding:0; }
+  ul.pick li { display:flex; align-items:center; gap:10px; margin-bottom:9px; }
+  ul.pick .q { color:var(--dim); font-size:12.5px; white-space:nowrap;
+    user-select:none; -webkit-user-select:none; }
+  ul.pick input { width:200px; }
+  p.err, .err { margin:0 0 16px; background:#3a1a1a; border:1px solid #7a2a2a; color:#ffb0b0;
+    padding:10px 12px; border-radius:8px; font-size:13px; }
+{{end}}`
+
+// accountsSrc 是账户管理页（US9）：列出账户并提供创建 / 恢复 / 删除入口。
+const accountsSrc = `{{define "accounts"}}<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>账户管理</title>
+<style>
+{{template "baseCSS"}}
+{{template "accountsCSS"}}
+  main { width:min(100%,var(--content)); margin:0 auto; padding:22px 24px 44px; }
+  h2.sec { font-size:12px; font-weight:600; color:var(--dim); margin:22px 0 10px;
+           user-select:none; -webkit-user-select:none; }
+</style>
+</head>
+<body>
+<header class="toolbar">
+  <div class="tbwrap">
+    <h1>账户管理</h1>
+    <span class="grow"></span>
+    <a class="btn" href="/">← 返回登录页</a>
+  </div>
+</header>
+<main>
+  {{if .Notice}}<p class="notice">{{.Notice}}</p>{{end}}
+  {{if .Err}}<p class="err">{{.Err}}</p>{{end}}
+  {{if .Accounts}}<ul class="list">{{range .Accounts}}<li>
+    <span class="grow"><span class="nm">{{.Label}}</span>{{if .Note}}<span class="ad">{{.Note}}</span>{{end}}</span>
+    <a class="btn danger" href="/accounts/delete?path={{.ID | urlquery}}">删除</a>
+  </li>{{end}}</ul>
+  {{else}}<div class="empty">还没有账户。先创建一个账户，或从助记词（恢复文件）恢复一个。</div>{{end}}
+  <h2 class="sec">可用动作</h2>
+  <div class="actions">
+    <a class="btn primary" href="/accounts/new">创建账户</a>
+    <a class="btn" href="/accounts/recover">恢复账户</a>
+  </div>
+</main>
+</body>
+</html>{{end}}`
+
+// createSrc 是创建账户的表单页（US9）：口令 + 词数；红线提示只出现在这里（AC9.5）。
+const createSrc = `{{define "create"}}<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>创建账户</title>
+<style>
+{{template "baseCSS"}}
+{{template "accountsCSS"}}
+  :root { --content:520px; }
+  main { width:min(100%,var(--content)); margin:0 auto; padding:22px 24px 44px; }
+  label { display:block; font-size:12.5px; color:var(--dim); margin:0 0 6px;
+          user-select:none; -webkit-user-select:none; }
+  button.primary { width:100%; margin-top:18px; padding:8px 14px; font-size:13.5px; }
+</style>
+</head>
+<body>
+<header class="toolbar">
+  <div class="tbwrap">
+    <h1>创建账户</h1>
+    <span class="grow"></span>
+    <a class="btn" href="/accounts">← 返回账户管理</a>
+  </div>
+</header>
+<main>
+  {{if .Err}}<p class="err">{{.Err}}</p>{{end}}
+  <form class="card" method="post" action="/accounts/new">
+    {{if .NameLocked}}<div class="fld">
+      <label>账户文件</label>
+      <p class="sub"><code>{{.Name}}</code></p>
+      <p class="note">这是本机第一个账户，固定写入默认账户路径；以后新建的账户再自选名称。</p>
+      <input type="hidden" name="name" value="{{.Name}}">
+    </div>{{else}}<div class="fld">
+      <label for="name">账户名称</label>
+      <input id="name" name="name" type="text" value="{{.Name}}" autocomplete="off" spellcheck="false"
+             placeholder="例如 工作（留空则用默认名称）">
+      <p class="note">会自动补 .json，并写入账户管理页列出的目录；名称以 . 开头或含路径分隔符会被拒绝。</p>
+    </div>{{end}}
+    <div class="fld">
+      <label for="words">助记词词数</label>
+      <select id="words" name="words">
+        <option value="12"{{if eq .Words 12}} selected{{end}}>12 词（推荐）</option>
+        <option value="24"{{if eq .Words 24}} selected{{end}}>24 词</option>
+      </select>
+    </div>
+    <div class="fld">
+      <label for="password">登录口令</label>
+      <input id="password" name="password" type="password" required autocomplete="new-password" autofocus>
+    </div>
+    <div class="fld">
+      <label for="password2">确认口令</label>
+      <input id="password2" name="password2" type="password" required autocomplete="new-password">
+    </div>
+    <button class="primary" type="submit">生成助记词</button>
+    <div class="warnbox">本工具只新建账户，绝不导入持有真实资产的钱包私钥或助记词。助记词只用于重建本工具自己创建的账户，请离线抄写保存。</div>
+  </form>
+</main>
+</body>
+</html>{{end}}`
+
+// mnemonicSrc 是助记词抄写 + 复述抽查页（US9）。
+// 不放「复制」按钮、词表不可选中、响应 no-store（AC9.2/AC9.12）。
+const mnemonicSrc = `{{define "mnemonic"}}<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>抄写助记词</title>
+<style>
+{{template "baseCSS"}}
+{{template "accountsCSS"}}
+  :root { --content:640px; }
+  main { width:min(100%,var(--content)); margin:0 auto; padding:22px 24px 44px; }
+  button.primary { width:100%; margin-top:16px; padding:8px 14px; font-size:13.5px; }
+  button.danger { width:100%; margin-top:10px; padding:7px 14px; font-size:13px; }
+</style>
+</head>
+<body>
+<header class="toolbar">
+  <div class="tbwrap"><h1>抄写助记词</h1><span class="grow"></span></div>
+</header>
+<main>
+  {{if .Err}}<p class="err">{{.Err}}</p>{{end}}
+  <div class="card">
+    <h2>助记词（{{len .Words}} 词）</h2>
+    <p class="sub">请立刻用纸笔按序号抄写。这是重建账户的唯一凭证，页面关闭后不会再显示。</p>
+    <ol class="mn">{{range .Words}}<li><span class="i">{{.Index}}</span><span class="w">{{.Word}}</span></li>{{end}}</ol>
+    <p class="sub">确认后将写入：<code>{{.Path}}</code></p>
+  </div>
+  <form class="card" method="post" action="/accounts/new/confirm">
+    <h2>复述抽查</h2>
+    <p class="sub">按下面提示复述对应的词，全部正确才会写入账户文件。</p>
+    <ul class="pick">{{range .Prompts}}<li>
+      <span class="q">第 {{.Index}} 个词</span>
+      <input name="{{.Field}}" type="text" autocomplete="off" spellcheck="false" autofocus required>
+    </li>{{end}}</ul>
+    <input type="hidden" name="token" value="{{.Token}}">
+    <button class="primary" type="submit">确认并写入账户</button>
+  </form>
+  <form method="post" action="/accounts/new/cancel">
+    <input type="hidden" name="token" value="{{.Token}}">
+    <button class="danger" type="submit">取消（不写入任何文件）</button>
+  </form>
+</main>
+</body>
+</html>{{end}}`
+
+// recoverSrc 是恢复账户页（US9）：用助记词重建，或用恢复文件重置登录口令。
+const recoverSrc = `{{define "recover"}}<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>恢复账户</title>
+<style>
+{{template "baseCSS"}}
+{{template "accountsCSS"}}
+  :root { --content:560px; }
+  main { width:min(100%,var(--content)); margin:0 auto; padding:22px 24px 44px; }
+  label { display:block; font-size:12.5px; color:var(--dim); margin:0 0 6px;
+          user-select:none; -webkit-user-select:none; }
+  button.primary { width:100%; margin-top:16px; padding:8px 14px; font-size:13.5px; }
+</style>
+</head>
+<body>
+<header class="toolbar">
+  <div class="tbwrap">
+    <h1>恢复账户</h1>
+    <span class="grow"></span>
+    <a class="btn" href="/accounts">← 返回账户管理</a>
+  </div>
+</header>
+<main>
+  {{if .Err}}<p class="err">{{.Err}}</p>{{end}}
+  <div class="warnbox">只恢复你自己的 go-safemedia 账户：不要把持有真实资产的钱包助记词输入本工具。</div>
+  <form class="card" method="post" action="/accounts/recover">
+    <h2>用助记词重建</h2>
+    <input type="hidden" name="mode" value="mnemonic">
+    <div class="fld">
+      <label for="mnemonic">助记词（按顺序、空格分隔）</label>
+      <textarea id="mnemonic" name="mnemonic" rows="3" spellcheck="false" autocapitalize="off" autocomplete="off"></textarea>
+    </div>
+    <div class="fld">
+      <label for="rc-name">写入账户名称</label>
+      <input id="rc-name" name="name" type="text" autocomplete="off" spellcheck="false" placeholder="留空 = 覆盖当前配置的账户">
+      <p class="note">留空时会覆盖当前配置的账户文件（原文件备份为 .bak）；填名称则新建到账户管理页列出的目录里。</p>
+    </div>
+    <div class="fld">
+      <label for="rc-pw">新的登录口令</label>
+      <input id="rc-pw" name="password" type="password" autocomplete="new-password">
+    </div>
+    <div class="fld">
+      <label for="rc-pw2">确认口令</label>
+      <input id="rc-pw2" name="password2" type="password" autocomplete="new-password">
+    </div>
+    <button class="primary" type="submit">重建并写入</button>
+  </form>
+  <form class="card" method="post" action="/accounts/recover">
+    <h2>用恢复文件重置登录口令</h2>
+    <input type="hidden" name="mode" value="recovery">
+    <div class="fld">
+      <label for="recovery_path">恢复文件路径</label>
+      <input id="recovery_path" name="recovery_path" type="text" autocomplete="off" spellcheck="false"
+             placeholder="例如 ~/.safemedia/recovery.json">
+      <p class="note">支持 ~ 展开；需要该文件自己的恢复口令（与登录口令不同）。</p>
+    </div>
+    <div class="fld">
+      <label for="recovery_password">恢复口令</label>
+      <input id="recovery_password" name="recovery_password" type="password" autocomplete="off">
+    </div>
+    <div class="fld">
+      <label for="rf-name">写入账户名称</label>
+      <input id="rf-name" name="name" type="text" autocomplete="off" spellcheck="false" placeholder="留空 = 覆盖当前配置的账户">
+    </div>
+    <div class="fld">
+      <label for="rf-pw">新的登录口令</label>
+      <input id="rf-pw" name="password" type="password" autocomplete="new-password">
+    </div>
+    <div class="fld">
+      <label for="rf-pw2">确认口令</label>
+      <input id="rf-pw2" name="password2" type="password" autocomplete="new-password">
+    </div>
+    <button class="primary" type="submit">重置登录口令</button>
+  </form>
+</main>
+</body>
+</html>{{end}}`
+
+// deleteSrc 是删除账户的确认页（US9）：必须说明「密档将永久无法启封」并要口令授权。
+const deleteSrc = `{{define "delete"}}<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>删除账户</title>
+<style>
+{{template "baseCSS"}}
+{{template "accountsCSS"}}
+  :root { --content:520px; }
+  main { width:min(100%,var(--content)); margin:0 auto; padding:22px 24px 44px; }
+  label { display:block; font-size:12.5px; color:var(--dim); margin:0 0 6px;
+          user-select:none; -webkit-user-select:none; }
+  .warnbox { margin-bottom:16px; }   /* 与下方「口令」标签拉开距离 */
+  button.danger { width:100%; margin-top:18px; padding:8px 14px; font-size:13.5px; }
+</style>
+</head>
+<body>
+<header class="toolbar">
+  <div class="tbwrap">
+    <h1>删除账户</h1>
+    <span class="grow"></span>
+    <a class="btn" href="/accounts">← 返回账户管理</a>
+  </div>
+</header>
+<main>
+  {{if .Err}}<p class="err">{{.Err}}</p>{{end}}
+  {{if .Path}}<form class="card" method="post" action="/accounts/delete">
+    <h2>要删除的账户</h2>
+    <p class="sub"><code>{{.Path}}</code></p>
+    <div class="warnbox">删除后这个账户无法再解锁它所封存的密档：<b>该账户封的密档将永久无法启封</b>（密档文件本身保留、不会删除）。若你仍持有它的助记词或恢复文件，之后可以重建账户再启封。账户文件会被移入回收目录，可手动还原。</div>
+    <div class="fld">
+      <label for="password">该账户的登录口令（确认是你本人）</label>
+      <input id="password" name="password" type="password" required autofocus autocomplete="current-password">
+    </div>
+    <input type="hidden" name="path" value="{{.Path}}">
+    <button class="danger" type="submit">确认删除</button>
+  </form>
+  {{else}}<div class="empty">请从账户管理页选择要删除的账户。</div>{{end}}
+</main>
+</body>
+</html>{{end}}`
+
 // treeCtx 是目录树模板的数据上下文：节点 + 当前高亮的条目链接。
 type treeCtx struct {
 	Node   treeNode
@@ -330,7 +654,8 @@ var pageTmpl = template.Must(template.New("pages").Funcs(template.FuncMap{
 	"nodeWith": func(ctx treeCtx, n treeNode) treeCtx {
 		return treeCtx{Node: n, Active: ctx.Active}
 	},
-}).Parse(baseCSS + treeCSS + treeTmpl + playerSrc + indexSrc + librarySrc + loginSrc))
+}).Parse(baseCSS + accountsCSS + treeCSS + treeTmpl + playerSrc + indexSrc + librarySrc + loginSrc +
+	accountsSrc + createSrc + mnemonicSrc + recoverSrc + deleteSrc))
 
 // playerPage 渲染播放页。tree 为空则不显示左侧目录树（单密档模式）。
 // Title 做 HTML 转义（密档文件名可能含任意字符）；back 为空则不显示返回链接。
@@ -420,10 +745,66 @@ func libraryPage(v pickerView) string {
 
 // loginView 是登录页模板的数据。
 type loginView struct {
-	Target   string          // 目标描述（库根/密档名）
-	Err      string          // 上次失败原因
-	Accounts []AccountOption // 可选账户（空 = 不渲染选择器）
-	Selected string          // 上次提交的账户标识（重绘时保持选中）
+	Target      string          // 目标描述（库根/密档名）
+	Err         string          // 上次失败原因
+	Accounts    []AccountOption // 可选账户（空 = 不渲染选择器）
+	Selected    string          // 上次提交的账户标识（重绘时保持选中）
+	ManageItems bool            // 是否显示「账户管理」入口（US9）
+}
+
+// accountsView 是账户管理列表页的数据。
+type accountsView struct {
+	Accounts []AccountOption
+	Notice   string
+	Err      string
+}
+
+// createView 是创建账户表单页的数据（不含任何口令）。
+type createView struct {
+	Name       string // 目标名称（无账户时为固定默认名）
+	NameLocked bool   // 目标名称不可改（本机第一个账户）
+	Words      int    // 助记词词数
+	Err        string
+}
+
+// mnemonicView 是助记词抄写 + 复述抽查页的数据。
+type mnemonicView struct {
+	Token   string
+	Words   []numberedWord
+	Prompts []promptItem
+	Path    string
+	Err     string
+}
+
+// recoverView 是恢复账户页的数据（绝不回显口令与助记词）。
+type recoverView struct {
+	Mode         string // mnemonic / recovery
+	Name         string
+	RecoveryPath string
+	Err          string
+}
+
+// deleteView 是删除账户确认页的数据。
+type deleteView struct {
+	Path string
+	Err  string
+}
+
+// accountsPage / createPage / mnemonicPage / recoverPage / deletePage 渲染 US9 的页面。
+// 与其它页面一致：模板执行失败必须可见（renderError），不得静默截断。
+func accountsPage(v accountsView) string { return renderTemplate("accounts", v) }
+func createPage(v createView) string     { return renderTemplate("create", v) }
+func mnemonicPage(v mnemonicView) string { return renderTemplate("mnemonic", v) }
+func recoverPage(v recoverView) string   { return renderTemplate("recover", v) }
+func deletePage(v deleteView) string     { return renderTemplate("delete", v) }
+
+// renderTemplate 执行指定模板；失败时返回可见的错误页。
+func renderTemplate(name string, data any) string {
+	var b strings.Builder
+	if err := pageTmpl.ExecuteTemplate(&b, name, data); err != nil {
+		return renderError(err)
+	}
+	return b.String()
 }
 
 // loginPage 渲染锁定态的登录页。

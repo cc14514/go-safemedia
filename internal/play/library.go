@@ -108,8 +108,13 @@ type LibraryOptions struct {
 	// 「账户 + 口令」后调用本回调取得私钥。与 Priv 二选一；回调实现方须在使用后清零口令字节。
 	Unlock func(accountID, password string) (*ecdsa.PrivateKey, error)
 
-	// Accounts 是登录页可选的账户（空 = 不渲染选择器，只输入口令）。
-	Accounts []AccountOption
+	// Accounts 返回登录页可选的账户（US8）。每次渲染都会调用一次，
+	// 因此运行中新增/删除账户后无需重启即可在登录页看到（AC9.1）。
+	// 返回空列表 = 不渲染选择器，只输入口令。
+	Accounts func() []AccountOption
+
+	// AccountsAdmin 启用账户管理页（US9）。为 nil → `/accounts*` 返回 404（CLI 形态）。
+	AccountsAdmin AccountsAdmin
 
 	Entries     []Entry
 	Target      string // 登录页展示的目标描述（通常为库根路径）
@@ -245,7 +250,8 @@ func NewLibrary(opts LibraryOptions) (*Library, error) {
 		softLock:    opts.SoftLock,
 		mediaPrefix: "/media/" + token + "/",
 		target:      opts.Target,
-		accounts:    opts.Accounts,
+		accountsFn:  opts.Accounts,
+		admin:       opts.AccountsAdmin,
 		unlockFn:    l.doUnlock,
 		session:     session,
 		preUnlocked: opts.Priv != nil,

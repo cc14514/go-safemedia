@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// styleFixturePages 渲染四个页面用于外观/文案守护测试。
+// styleFixturePages 渲染各页面用于外观/文案守护测试（覆盖引擎的全部页面）。
 func styleFixturePages() map[string]string {
 	tree := treeNode{Dirs: []treeNode{{
 		Name:  "a",
@@ -22,6 +22,14 @@ func styleFixturePages() map[string]string {
 			{ID: "/home/u/.safemedia/keystore.json", Label: "keystore.json", Note: "0x1a2b…9f8e"},
 			{ID: "/home/u/.safemedia/accounts/work.json", Label: "work.json", Note: "0x9ed7…da40"},
 		}, Selected: "/home/u/.safemedia/accounts/work.json"}),
+		"accounts": accountsPage(accountsView{Accounts: []AccountOption{
+			{ID: "/home/u/.safemedia/keystore.json", Label: "keystore.json", Note: "0x1a2b…9f8e"},
+			{ID: "/home/u/.safemedia/accounts/work.json", Label: "work.json", Note: "0x9ed7…da40"},
+		}}),
+		"create":   createPage(createView{Name: "keystore.json", NameLocked: true, Words: 12}),
+		"mnemonic": mnemonicPage(mnemonicView{Token: "tok", Words: []numberedWord{{Index: 1, Word: "abandon"}}, Prompts: []promptItem{{Index: 1}}, Path: "/home/u/.safemedia/accounts/work.json"}),
+		"recover":  recoverPage(recoverView{Mode: "mnemonic"}),
+		"delete":   deletePage(deleteView{Path: "/home/u/.safemedia/accounts/work.json"}),
 	}
 }
 
@@ -80,17 +88,25 @@ func TestPagesLookLikeDesktopAppNotWebLinks(t *testing.T) {
 func TestPagesHaveNoFillerCopy(t *testing.T) {
 	pages := styleFixturePages()
 	banned := []string{
-		"绝不导入",      // 只新建账户的红线说明（留在 CLI 输出与文档里）
 		"明文不落盘",     // 登录页/索引页的解释句
 		"环回",        // 播放页的技术说明句
 		"元数据",       // 索引页关于「不显示原始视频名」的解释
 		"只用于本机解密",   // 登录页的解释句
 		"空闲超时或手动锁定", // 登录页的解释句
 	}
+	// 红线提示是唯一允许的「说明句」，且只出现在「用户交出/拿到助记词」的两页（AC9.5）。
+	redlinePages := map[string]bool{"create": true, "recover": true}
 	for name, html := range pages {
 		for _, b := range banned {
 			if strings.Contains(html, b) {
 				t.Fatalf("%s 页仍含说明性文案 %q（AC8.6 要求删除）:\n%s", name, b, html)
+			}
+		}
+		if !redlinePages[name] {
+			for _, b := range []string{"绝不导入", "持有真实资产"} {
+				if strings.Contains(html, b) {
+					t.Fatalf("%s 页出现了红线说明 %q（只允许在创建页与恢复页，AC9.5）:\n%s", name, b, html)
+				}
 			}
 		}
 	}
@@ -110,6 +126,74 @@ func TestPagesHaveNoFillerCopy(t *testing.T) {
 	} {
 		if !strings.Contains(pages["login"], want) {
 			t.Fatalf("登录页缺少功能元素 %q:\n%s", want, pages["login"])
+		}
+	}
+}
+
+// pageSources 返回全部页面模板源码（含账户管理页），用于整站级外观守护。
+func pageSources() map[string]string {
+	return map[string]string{
+		"player":   playerSrc,
+		"index":    indexSrc,
+		"login":    loginSrc,
+		"picker":   librarySrc,
+		"accounts": accountsSrc,
+		"create":   createSrc,
+		"mnemonic": mnemonicSrc,
+		"recover":  recoverSrc,
+		"delete":   deleteSrc,
+	}
+}
+
+// T9.7（AC9.6）：工具栏必须与正文列对齐 —— 正文列宽只允许写 var(--content)，
+// 窄页面通过重定义 --content 收窄（共享的 .tbwrap 规则读同一个变量）。
+// 曾出现：表单页把 main 硬编码成 520px，工具栏标题仍贴在 840px 列的左边，两者错位，
+// 看起来就像「网页里放了个居中的卡片」。硬编码 = 测试判红。
+func TestToolbarAlignsWithContentColumn(t *testing.T) {
+	if !strings.Contains(baseCSS, ".tbwrap { width:min(100%,var(--content));") {
+		t.Fatalf("工具栏容器 .tbwrap 未按 --content 取宽:\n%s", baseCSS)
+	}
+	headered := 0
+	for name, src := range pageSources() {
+		if !strings.Contains(src, `<header class="toolbar">`) {
+			continue
+		}
+		headered++
+		got := regexp.MustCompile(`main\s*\{[^}]*width:min\(100%,([^;]*)\)`).FindAllStringSubmatch(src, -1)
+		if len(got) == 0 {
+			t.Fatalf("%s 页有工具栏却没有正文列宽声明", name)
+		}
+		for _, g := range got {
+			if strings.TrimSpace(g[1]) != "var(--content)" {
+				t.Fatalf("%s 页把正文列宽硬编码为 %q（应写 var(--content) 并重定义 --content，否则工具栏与正文错位）", name, g[1])
+			}
+		}
+	}
+	if headered < 6 {
+		t.Fatalf("带工具栏的页面只找到 %d 个，守护覆盖面不足", headered)
+	}
+}
+
+// T9.8（AC9.5）：红线提示只允许出现在「用户交出或拿到助记词」的两页（创建页、恢复页），
+// 其他页面保持无说明性文案（AC8.6）。
+func TestRedlineNoticeOnlyWhereSecretsEnter(t *testing.T) {
+	allowed := map[string]bool{"create": true, "recover": true}
+	for name, src := range pageSources() {
+		if strings.Contains(src, "绝不导入") || strings.Contains(src, "持有真实资产") {
+			if !allowed[name] {
+				t.Fatalf("%s 页出现了红线提示（只允许出现在创建页与恢复页）", name)
+			}
+		}
+	}
+	for _, name := range []string{"create", "recover"} {
+		if !strings.Contains(pageSources()[name], "持有真实资产") {
+			t.Fatalf("%s 页缺少红线提示（生成/重建密钥前必须让用户看到）", name)
+		}
+	}
+	// AC9.12：助记词页不提供「复制」入口（必须手抄）。
+	for _, bad := range []string{"复制", "clipboard", "navigator.clipboard"} {
+		if strings.Contains(pageSources()["mnemonic"], bad) {
+			t.Fatalf("助记词页出现了 %q（AC9.12 要求必须手抄，不提供复制）", bad)
 		}
 	}
 }

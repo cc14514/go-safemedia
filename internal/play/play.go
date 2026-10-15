@@ -24,8 +24,14 @@ type Options struct {
 	// accountID 来自 Accounts 列表，调用前引擎已校验它在列表内。
 	Unlock func(accountID, password string) (name string, r *vault.Reader, err error)
 
-	// Accounts 是登录页可选的账户（空 = 不渲染选择器，只输入口令）。
-	Accounts []AccountOption
+	// Accounts 返回登录页可选的账户（US8）。每次渲染都会调用一次，
+	// 因此运行中新增/删除账户后无需重启即可在登录页看到（AC9.1）。
+	// 返回空列表 = 不渲染选择器，只输入口令。
+	Accounts func() []AccountOption
+
+	// AccountsAdmin 启用账户管理页（US9）。为 nil → `/accounts*` 返回 404
+	// （CLI 形态：不提供账户管理界面）。
+	AccountsAdmin AccountsAdmin
 
 	IdleTimeout time.Duration // 0 → DefaultIdleTimeout
 	Now         func() time.Time
@@ -75,7 +81,8 @@ func New(opts Options) (*Server, error) {
 		softLock:    opts.SoftLock,
 		mediaPrefix: "/media/" + token,
 		target:      opts.Name,
-		accounts:    opts.Accounts,
+		accountsFn:  opts.Accounts,
+		admin:       opts.AccountsAdmin,
 		unlockFn:    s.doUnlock,
 		session:     session,
 		preUnlocked: opts.Reader != nil,

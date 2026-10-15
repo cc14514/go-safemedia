@@ -88,7 +88,7 @@ tests/e2e/           L3 端到端 + REPORT.md + fetch-samples.sh
 - 容器按**明文首字节嗅探**（`DetectContainer`：`ftyp` brand `"qt  "` → mov；EBML DocType `webm`/`matroska` 区分，mkv 明确拒绝），不信任文件扩展名。
 - 索引页与播放页侧栏**共用同一棵树与同一套模板**（`treeCSS` + `treeTmpl`）；树在 `Library` 构造时扫描一次，追加密档后需重跑 `play` 才可见。
 - 播放页 `<aside class="tree">` 常驻左侧（`position:sticky; height:100vh`），`li.file.active` 高亮并 `scrollIntoView`；≤820px 移到播放器上方；全屏只 `<video>` 全屏。
-- **页面外观 = 原生深色 app，不是网页**（AC7.9，用户反馈「放个超链接就露馅」）：四页共用 `page.go` 的 `baseCSS`；可点元素一律 `<button>` 或 `<a class="btn">`（导航）／`<a class="row">`（整行可点列表行），禁止无 class 的裸 `<a>` 与 `text-decoration:underline`；工具栏 `header.toolbar > .tbwrap` 与正文同宽（`--content:840px`）左对齐。守护测试 `internal/play/page_style_test.go`。
+- **页面外观 = 原生深色 app，不是网页**（AC7.9，用户反馈「放个超链接就露馅」）：四页共用 `page.go` 的 `baseCSS`；可点元素一律 `<button>` 或 `<a class="btn">`（导航）／`<a class="row">`（整行可点列表行），禁止无 class 的裸 `<a>` 与 `text-decoration:underline`；工具栏 `header.toolbar > .tbwrap` 与正文同宽（`--content:840px`）左对齐。守护测试 `internal/play/page_style_test.go`（`styleFixturePages` 覆盖引擎全部页面）。改外观后想人眼核对：临时写个把页面渲染成 HTML 的夹具，用 headless Chrome `--screenshot` 出图看（夹具不入库）。
 - 改可见文案前先查是不是只对 CLI 成立：曾写「关闭命令行窗口即结束会话」，在桌面外壳里是错的（已改为「明文不落盘」）。
 
 ## 桌面外壳（`desktop/`，specs/002）
@@ -97,7 +97,9 @@ tests/e2e/           L3 端到端 + REPORT.md + fetch-samples.sh
 - **锁定语义靠 `SoftLock`**：外壳传 `true`（锁定回登录页、端口存活、可再次解锁）；CLI 不传（零值 = 锁定时关停，行为与改动前一致）。改 `internal/play` 门控后**必须同时验证两条语义**（CLI 回归 + 外壳链路）。
 - 登录流程：`GET /login`（表单）→ `POST /login`（`account` + `password`）→ 会话 cookie `sv_session`；会话启用时内容路由校验该 cookie，锁定态访问媒体路径 403（不 panic）。
 - **多账户（US8）**：登录页有原生 `<select>`；账户列表由外壳发现后**注入**引擎（`Options.Accounts`/`LibraryOptions.Accounts`），引擎自身不遍历文件系统。`Unlock` 回调签名是 `func(accountID, password string)`；列表非空时 `account` 必须在列表内，否则在**调用回调之前**拒绝（AC8.4）。`internal/play` 的账户列表模块是 `accounts.go`，发现逻辑在 `internal/desktopcfg/accounts.go`，只读 keystore 公开地址在 `internal/account/address.go`。
-- **页面不放说明性文案（AC8.6）**：登录页/索引页/播放页只留功能性信息（库根、数量、文件名与大小、错误原因）。红线说明留在 CLI 输出与文档里，别往页面上加「明文不落盘」「绝不导入…」这类段落——`page_style_test.go` 会判红。
+- **页面不放说明性文案（AC8.6）**：登录页/索引页/播放页只留功能性信息（库根、数量、文件名与大小、错误原因）。红线说明留在 CLI 输出与文档里，别往页面上加「明文不落盘」「绝不导入…」这类段落——`page_style_test.go` 会判红（唯一例外：创建页与恢复页的「红线」提示，AC9.5，`TestRedlineNoticeOnlyWhereSecretsEnter` 钉住它只能出现在这两页——它们是用户交出/拿到助记词的地方，恢复页尤其可能被用来导入别人的钱包助记词；CLI 的 `account create` / `account recover` 同样先打印）。
+- **账户管理在页面里做（US9）**：登录页 → `/accounts`（创建 / 恢复 / 删除），路由 `core.handleAccounts` 在 `gate` 里**只在锁定态**放行（解锁后 303 回索引页，`accounts_admin_page_test.go` 的 T9.1 钉住）。引擎侧接口是 `Options.AccountsAdmin`（`internal/play` 只定义接口），实现与落盘在 `internal/desktopcfg`（`accountAdmin`/`NewAccountAdmin`），账户文件发现也在那里。
+- **创建账户的助记词只出现一次**：`Create` 生成账户 → 助记词只在内存 challenge 里（`putChallenge`）→ 复述抽查通过后才 `ConfirmCreate` 写盘；助记词**从不预写盘**（cli 也是这个顺序），`CancelCreate` 丢弃。抽查失败可重抄，口令与助记词不回显到页面。账户管理页响应头同样 `no-store`，webview 不留缓存。
 - **库根在页面里可换**（US7）：索引页 → `/library` 目录选择页（逐级浏览 + 每目录直含密档数）→ `POST /library` → `SetRoot` 规范路径、重扫、原子替换 root/tree/byID/order（`id` 重新分配）→ 回调 `LibraryOptions.OnLibraryChange`（外壳写 `desktop.json` 并保留 account 字段；CLI 不传该回调，选择只对本次会话有效）。非法路径**不改动任何状态**、在页面内显示中文原因；`~` 会展开、相对路径规范为绝对路径。锁定态一律回登录页（不枚举本机目录）。
 - 分发：`make desktop` → `make dist`（`.app` + CLI 打成 zip）→ `make release`（`gh`）。首版仅 macOS/arm64、不签名不公证；arm64 上 Go 自动 ad-hoc 签名，用户只需 `xattr -dr com.apple.quarantine`。
 - **明文红线在 webview 缓存上已验证**：WKWebView 用持久化数据仓库（`~/Library/Caches/<bundle-id>/WebKit`、`~/Library/WebKit/<bundle-id>`），但它尊重 `Cache-Control: no-store`——对照实验（可缓存对照有残留、引擎 `no-store` 响应与真实 mp4 流零残留）见 `tests/e2e/REPORT.md` 的 002 段。**改播放页/媒体响应头时不得去掉 `no-store`。**

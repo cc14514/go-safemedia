@@ -213,9 +213,11 @@ func TestDesktopAccountSelection(t *testing.T) {
 		Target:      libDir,
 		SoftLock:    true,
 		IdleTimeout: play.DefaultIdleTimeout,
-		Accounts: []play.AccountOption{
-			{ID: idA, Label: "keystore-a.json", Note: account.ShortAddress(acctA.Address())},
-			{ID: idB, Label: "keystore-b.json", Note: account.ShortAddress(acctB.Address())},
+		Accounts: func() []play.AccountOption {
+			return []play.AccountOption{
+				{ID: idA, Label: "keystore-a.json", Note: account.ShortAddress(acctA.Address())},
+				{ID: idB, Label: "keystore-b.json", Note: account.ShortAddress(acctB.Address())},
+			}
 		},
 		Unlock: func(accountID, password string) (*ecdsa.PrivateKey, error) {
 			unlockCalls++

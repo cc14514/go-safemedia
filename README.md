@@ -75,9 +75,11 @@ make desktop-run    # 构建并直接运行
 { "library": "/Users/you/vaults" }
 ```
 
-配置文件里还可以加 `"account"` 指定别的账户文件（默认 `~/.safemedia/keystore.json`）；它同时决定登录页里默认选中的是哪个账户，其余账户只要放在 `~/.safemedia/accounts/` 下就会被自动列出（新建账户时用 `--account ~/.safemedia/accounts/工作.json` 即可归置）。
+配置文件里还可以加 `"account"` 指定别的账户文件（默认 `~/.safemedia/keystore.json`）；它同时决定登录页里默认选中的是哪个账户，其余账户只要放在 `~/.safemedia/accounts/` 下就会被自动列出。
 
-> 从源码调试时可以直接带参数启动（`make desktop-run ARGS=~/vaults`）；但**双击启动的 `.app` 不会收到启动参数**（macOS 经 LaunchServices 启动时不送达），所以选库请用上面的配置文件。封存视频、新建账户、恢复账户仍然用 CLI（`safemedia seal` / `safemedia account create`）。
+**账户管理也在 app 里**：登录页点「账户管理」，可以**创建**（当场显示助记词并要求复述抽查）、**恢复**（助记词 / 恢复文件）、**删除**（需输该账户口令，文件移入回收目录、密档不动）。这些动作只在锁定态可用。命令行仍是等价的备用通道（`safemedia account create` / `account recover`，用 `--account ~/.safemedia/accounts/工作.json` 归置多个账户）。
+
+> 从源码调试时可以直接带参数启动（`make desktop-run ARGS=~/vaults`）；但**双击启动的 `.app` 不会收到启动参数**（macOS 经 LaunchServices 启动时不送达），所以选库请用上面的配置文件。封存视频仍然用 CLI（`safemedia seal`）。
 
 **发布**（维护者）：
 

@@ -153,6 +153,11 @@ func TestM1AccountCLIFullFlow(t *testing.T) {
 	if got := extractAddress(out3); got != addr {
 		t.Fatalf("恢复后地址变了: %s != %s", got, addr)
 	}
+	// AC9.5：recover 是另一条「用户交出助记词」的路径，与 create 一样必须先看到红线提示
+	// （否则用户可能把持有真实资产的钱包助记词导进本工具）。
+	if !strings.Contains(out3, "红线提示") {
+		t.Fatalf("account recover 输出缺少红线提示（AC9.5）:\n%s", out3)
+	}
 }
 
 func TestM1RecoverFromMnemonic(t *testing.T) {

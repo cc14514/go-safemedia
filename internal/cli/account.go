@@ -107,6 +107,9 @@ func newAccountRecoverCmd() *cobra.Command {
 		Short: "恢复账户：用助记词重建，或用恢复文件重置登录口令",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			out := cmd.OutOrStdout()
+			// 红线提示：recover 是另一条「用户交出助记词」的路径（可能被用来导入别人的钱包），
+			// 与 account create 一致地显示（AC9.5）。
+			fmt.Fprintln(out, redlineWarning)
 			if fromMnemonic == (fromRecovery != "") {
 				return fmt.Errorf("请二选一：--from-mnemonic 或 --from-recovery <path>")
 			}

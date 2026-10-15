@@ -138,7 +138,8 @@ func writeReport() error {
 	fmt.Fprintf(&b, "| 6 | CLI 不退化（AC6.2） | CLI 播放输出/退出码不变、不出现登录页 | 既有 L1/L2/L3 全通过；L2 显式断言无 `action=\"/login\"` | `tests/integration/play_cli_test.go` | **PASS** |\n")
 	fmt.Fprintf(&b, "| 7 | 一条命令出产物（AC5.1） | `make dist` 产出含 `.app` + CLI 的 zip | `dist/safemedia_<ver>_darwin-arm64.zip`（~12MB），内含 `safemedia.app`、`safemedia`、`说明.txt` | `make dist` + `unzip -l` | **PASS** |\n")
 	fmt.Fprintf(&b, "| 8 | 页面内换库根（US7，AC7.1–7.8） | 索引页可进目录选择页、选定后立即重扫并按子目录展示、非法路径不改动状态、锁定态不可枚举目录 | 选择页列出子目录与直含密档数；`POST /library` → 303 + 索引页新树；非法路径 200 页面内提示且库根不变；锁定态 `/library` 回登录页 | `internal/play/picker_test.go`（L1）+ `tests/integration/picker_flow_test.go`（L2）+ `desktop/main_test.go`（持久化） | **PASS** |\n")
-	fmt.Fprintf(&b, "| 9 | 登录页选账户（US8，AC8.1–8.7） | 列出本机账户并要求**选对**才能解锁；列表外标识在解密前被拒；页面无说明性段落 | 登录页 `<select>` 列出 `keystore.json` / `accounts/work.json`（名 + 地址短形式）、首项默认选中；选错账户 → 「口令错误或与所选账户不匹配」且无会话、重绘保持选中；伪造标识 → 「请选择一个可用账户」且解锁回调 0 次调用；无账户 → 提示 `safemedia account create`；页面文案守护（无「明文不落盘」等段落） | `internal/account`、`internal/desktopcfg`、`internal/play/accounts_test.go`、`page_style_test.go`（L1）+ `tests/integration/desktop_flow_test.go`、`desktop/main_test.go` | **PASS** |\n\n")
+	fmt.Fprintf(&b, "| 9 | 登录页选账户（US8，AC8.1–8.7） | 列出本机账户并要求**选对**才能解锁；列表外标识在解密前被拒；页面无说明性段落 | 登录页 `<select>` 列出 `keystore.json` / `accounts/work.json`（名 + 地址短形式）、首项默认选中；选错账户 → 「口令错误或与所选账户不匹配」且无会话、重绘保持选中；伪造标识 → 「请选择一个可用账户」且解锁回调 0 次调用；无账户 → 提示 `safemedia account create`；页面文案守护（无「明文不落盘」等段落） | `internal/account`、`internal/desktopcfg`、`internal/play/accounts_test.go`、`page_style_test.go`（L1）+ `tests/integration/desktop_flow_test.go`、`desktop/main_test.go` | **PASS** |\n")
+	fmt.Fprintf(&b, "| 10 | app 内账户管理（US9，AC9.1–9.12） | 创建（助记词抄写+抽查后才落盘）/ 恢复（助记词、恢复文件）/ 删除（口令授权、文件进回收目录）；仅锁定态可用 | 锁定态：`/accounts` 列表可进创建/恢复/删除；创建 → 助记词页（编号网格 + 3 处抽查，**无复制按钮**）→ 抽查失败留在本页且实现侧 0 次写盘 → 通过后 303 且新账户立刻出现在登录页并**能用它登录**；删除需该账户口令（错口令 0 改动）→ 文件移入 `~/.safemedia/trash/`、`desktop.json` 的 `account` 清空；解锁后访问 `/accounts` → 303 回索引页；`AccountsAdmin` 为空 → 404（CLI 形态） | `internal/desktopcfg/accounts_admin_test.go`、`internal/play/accounts_admin_page_test.go`、`page_style_test.go`（L1）+ `desktop/main_test.go` 的 `TestDesktopAccountManagementEndToEnd`（L2，进程内全链路） | **PASS** |\n\n")
 	fmt.Fprintf(&b, "### 缓存对照实验（AC4.1 证据）\n\n")
 	fmt.Fprintf(&b, "用与引擎同款响应头的探针外壳复现「检索方法是否有效」：\n\n")
 	fmt.Fprintf(&b, "```\n")
@@ -417,7 +418,8 @@ func startPlay(t *testing.T, bin string, env []string, accountPath, passphrase, 
 // sampleKind 描述一个测试用视频样本。
 type sampleKind struct {
 	Name string
-	Real bool // 真实可解码视频（否则为合成头）
+	Real bool   // 真实可解码视频（否则为合成头）
+	Note string // 来源说明（如「由 X 重标 ftyp brand 生成」），进 REPORT 的样本行
 	Data []byte
 }
 
@@ -466,12 +468,52 @@ func loadSamples(t *testing.T) []sampleKind {
 		if len(samples) == 0 {
 			samples = []sampleKind{{Name: "synthetic.mp4", Real: false, Data: syntheticMP4(256 * 1024)}}
 		}
+		// 样本来源如实标注：`fetch-samples.sh` 在取不到 .mov 镜像时会由 mp4 重标 ftyp brand
+		// 生成（同样的码流、仅容器品牌不同）。报告里不能把派生样本说成下载来的真实 .mov，
+		// 也不能反过来说源文件是派生的 —— 所以只认脚本写下的**来源清单**（`<dir>/.provenance`，
+		// 每行 `派生物 <- 源文件`），不做猜测。
+		for derived, src := range readProvenance(dir) {
+			for i := range samples {
+				if samples[i].Name == derived {
+					samples[i].Note = fmt.Sprintf("由 %s 重标 ftyp brand 生成", src)
+				}
+			}
+		}
 		for _, s := range samples {
-			meta.Samples = append(meta.Samples, fmt.Sprintf("%s(%s, %d B)", s.Name, realTag(s.Real), len(s.Data)))
+			meta.Samples = append(meta.Samples, fmt.Sprintf("%s(%s, %d B%s)", s.Name, realTag(s.Real), len(s.Data), noteTag(s.Note)))
 		}
 		sampleCache = samples
 	})
 	return sampleCache
+}
+
+// readProvenance 读取样本目录里的来源清单（由 fetch-samples.sh 写入）：
+// 每行 `派生物 <- 源文件`。缺失或不可读时返回空表（不猜测来源）。
+func readProvenance(dir string) map[string]string {
+	out := map[string]string{}
+	data, err := os.ReadFile(filepath.Join(dir, ".provenance"))
+	if err != nil {
+		return out
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		parts := strings.SplitN(strings.TrimSpace(line), "<-", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		derived := strings.TrimSpace(parts[0])
+		src := strings.TrimSpace(parts[1])
+		if derived != "" && src != "" {
+			out[derived] = src
+		}
+	}
+	return out
+}
+
+func noteTag(note string) string {
+	if note == "" {
+		return ""
+	}
+	return ", " + note
 }
 
 func realTag(real bool) string {

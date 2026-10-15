@@ -49,12 +49,16 @@ fetch_first "Big_Buck_Bunny_360_10s_1MB.webm" \
   "https://test-videos.co.uk/vids/bigbuckbunny/webm/vp9/360/Big_Buck_Bunny_360_10s_1MB.webm" \
   || echo "⚠ 拿不到 webm 样本，L3 将跳过 WebM 行" >&2
 
+rm -f .provenance
+
 # mov：优先公开镜像；镜像不可达时由 mp4 重标 ftyp major_brand 生成 QuickTime 样本
 # （同一种 ISO BMFF 结构、同样的 H.264/AAC 轨道，只是容器品牌标记为 'qt  '）。
 if ! fetch_first "sample_640x360.mov" "https://filesamples.com/samples/video/mov/sample_640x360.mov"; then
   echo "⚠ 无 .mov 镜像可用 → 由 $MP4 生成 QuickTime 样本 bbb_qt.mov（重标 ftyp brand 为 'qt  '）"
   cp "$MP4" bbb_qt.mov
   printf 'qt  ' | dd of=bbb_qt.mov bs=1 seek=8 conv=notrunc 2>/dev/null
+  # 来源清单：L3 报告据此标注样本来源，不得把派生样本说成下载来的真实 .mov。
+  printf '%s <- %s\n' "bbb_qt.mov" "$MP4" > .provenance
 fi
 
 echo
