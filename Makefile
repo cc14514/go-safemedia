@@ -37,7 +37,7 @@ test-l2:
 ##   SAFEMEDIA_E2E_SAMPLES=<dir>  指定真实样本目录（见 tests/e2e/fetch-samples.sh）
 ##   SAFEMEDIA_E2E_NO_BROWSER=1   跳过无头浏览器解码校验
 test-l3:
-	go test ./tests/e2e/... -v
+	go test -count=1 ./tests/e2e/... -v
 	@echo "▶ L3 报告已生成：tests/e2e/REPORT.md"
 
 test: test-l1 test-l2

@@ -88,6 +88,8 @@ tests/e2e/           L3 端到端 + REPORT.md + fetch-samples.sh
 - 容器按**明文首字节嗅探**（`DetectContainer`：`ftyp` brand `"qt  "` → mov；EBML DocType `webm`/`matroska` 区分，mkv 明确拒绝），不信任文件扩展名。
 - 索引页与播放页侧栏**共用同一棵树与同一套模板**（`treeCSS` + `treeTmpl`）；树在 `Library` 构造时扫描一次，追加密档后需重跑 `play` 才可见。
 - 播放页 `<aside class="tree">` 常驻左侧（`position:sticky; height:100vh`），`li.file.active` 高亮并 `scrollIntoView`；≤820px 移到播放器上方；全屏只 `<video>` 全屏。
+- **页面外观 = 原生深色 app，不是网页**（AC7.9，用户反馈「放个超链接就露馅」）：四页共用 `page.go` 的 `baseCSS`；可点元素一律 `<button>` 或 `<a class="btn">`（导航）／`<a class="row">`（整行可点列表行），禁止无 class 的裸 `<a>` 与 `text-decoration:underline`；工具栏 `header.toolbar > .tbwrap` 与正文同宽（`--content:840px`）左对齐。守护测试 `internal/play/page_style_test.go`。
+- 改可见文案前先查是不是只对 CLI 成立：曾写「关闭命令行窗口即结束会话」，在桌面外壳里是错的（已改为「明文不落盘」）。
 
 ## 桌面外壳（`desktop/`，specs/002）
 

@@ -5,18 +5,72 @@ import (
 	"strings"
 )
 
+// baseCSS 是所有页面共用的基础样式（一处定义、四处 {{template "baseCSS"}} 复用）。
+// 目标是「看起来像原生 macOS 深色应用」而不是网页（用户反馈：页面里冒出超链接就露馅）：
+//
+//	· 按钮：<button> 与 <a class="btn"> 外观完全相同（导航用 a，不出现任何链接色/下划线），
+//	  不可选中、箭头光标、hover / 按下 / 键盘焦点三态；
+//	· 文字链接一律以按钮或列表行呈现；列表行整行可点、hover 给底色、不改文字颜色；
+//	· 输入框：深色内嵌底 + 焦点环；跟随系统深色外观（color-scheme: dark）。
+const baseCSS = `{{define "baseCSS"}}
+  :root { color-scheme: dark;
+    --bg:#1b1b1d; --bg-side:#151517; --panel:#212123; --field:#101012;
+    --line:#333336; --line-soft:#2a2a2c; --text:#e9e9ec; --dim:#9b9ba1;
+    --accent:#3f7a34; --accent-hi:#4a8f3e; --accent-text:#e8f7e2;
+    --focus:#4d8de0; --radius:7px; --content:840px; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+    font:13.5px/1.55 -apple-system,"SF Pro Text","Helvetica Neue","PingFang SC",sans-serif;
+    -webkit-font-smoothing:antialiased; }
+  h1 { font-size:15px; font-weight:600; margin:0; }
+  code { font-family:ui-monospace,"SF Mono",Menlo,monospace; font-size:12.5px;
+    background:#00000055; padding:1px 6px; border-radius:5px; }
+  ::selection { background:#3f7a3466; }
+
+  /* 按钮：a.btn 与 button 视觉一致，导航（换页）也走按钮外观 */
+  button, a.btn { -webkit-appearance:none; appearance:none; display:inline-flex; align-items:center;
+    justify-content:center; gap:6px; font:inherit; font-size:13px; font-weight:500; color:var(--text);
+    background:#333336; border:1px solid #48484b; border-radius:var(--radius); padding:5px 12px;
+    min-height:25px; text-decoration:none; cursor:default;
+    user-select:none; -webkit-user-select:none; white-space:nowrap; }
+  button:hover, a.btn:hover { background:#3d3d41; }
+  button:active, a.btn:active { background:#2b2b2e; border-color:#3a3a3d; }
+  button:disabled { opacity:.45; }
+  button:focus-visible, a.btn:focus-visible, input:focus-visible { outline:2px solid var(--focus); outline-offset:2px; }
+  button.primary, a.btn.primary { background:var(--accent); border-color:#4f8a44; color:var(--accent-text); }
+  button.primary:hover, a.btn.primary:hover { background:var(--accent-hi); }
+  button.primary:active, a.btn.primary:active { background:#356529; }
+
+  input[type=password], input[type=text] { -webkit-appearance:none; appearance:none; width:100%;
+    background:var(--field); color:var(--text); border:1px solid #3c3c3f; border-radius:var(--radius);
+    padding:7px 10px; font:inherit; }
+  input:focus { outline:none; border-color:var(--focus); box-shadow:0 0 0 3px #4d8de033; }
+
+  /* 窗口顶部工具栏：像原生窗口的一行控件；内容与正文列左对齐 */
+  header.toolbar { display:block; padding:9px 24px; background:var(--panel);
+    border-bottom:1px solid var(--line-soft); position:sticky; top:0; z-index:2; }
+  header.toolbar .tbwrap { width:min(100%,var(--content)); margin:0 auto; display:flex; align-items:center; gap:10px; }
+  header.toolbar .grow { flex:1; min-width:0; }
+  header.toolbar, header.toolbar * { user-select:none; -webkit-user-select:none; }
+
+  /* 列表行：整行可点，hover 给底色，不改文字颜色、无下划线 */
+  a.row { color:var(--text); text-decoration:none; }
+{{end}}`
+
 // treeCSS 是目录树的共享样式（索引页与播放页侧栏共用）。
 const treeCSS = `{{define "treeCSS"}}
-  ul.tree { list-style:none; margin:0; padding-left:10px; }
+  ul.tree { list-style:none; margin:0; padding-left:8px; }
   ul.tree li { padding:1px 0; }
-  ul.tree details > summary { cursor:pointer; font-weight:600; opacity:.85; padding:2px 4px; border-radius:6px; }
-  ul.tree details > summary:hover { background:#202020; }
+  ul.tree details > summary { cursor:pointer; font-weight:500; color:#c9c9ce; padding:3px 6px; border-radius:5px;
+                              user-select:none; -webkit-user-select:none; }
+  ul.tree details > summary:hover { background:#ffffff0d; }
+  ul.tree details[open] > summary { color:var(--text); }
   ul.tree li.file { display:flex; align-items:baseline; gap:8px; }
-  ul.tree li.file a { flex:1; min-width:0; display:block; padding:3px 6px; border-radius:6px;
-                      color:#cfcfcf; text-decoration:none; word-break:break-all; }
-  ul.tree li.file a:hover { background:#222; }
-  ul.tree li.file.active a { background:#23331f; color:#b6f0b6; }
-  ul.tree li.file .sz { opacity:.4; font-size:12px; white-space:nowrap; }
+  ul.tree li.file a { flex:1; min-width:0; display:block; padding:3px 6px; border-radius:5px; cursor:pointer;
+                      color:#d2d2d7; text-decoration:none; word-break:break-all; }
+  ul.tree li.file a:hover { background:#ffffff0d; }
+  ul.tree li.file.active a { background:var(--accent); color:var(--accent-text); }
+  ul.tree li.file .sz { opacity:.35; font-size:11.5px; white-space:nowrap; }
 {{end}}`
 
 // treeTmpl 是递归渲染目录树的模板。
@@ -24,7 +78,7 @@ const treeCSS = `{{define "treeCSS"}}
 // 故不能用 $ 直接指向页面数据）。
 const treeTmpl = `{{define "tree"}}<ul class="tree">
 {{range .Node.Dirs}}<li class="dir"><details open><summary>{{.Name}}</summary>{{template "tree" (nodeWith $ .)}}</details></li>
-{{end}}{{range .Node.Files}}<li class="file{{if eq .Link $.Active}} active{{end}}"><a href="{{.Link}}" title="{{.Label}}">{{.Name}}</a><span class="sz">{{.Size}}</span></li>
+{{end}}{{range .Node.Files}}<li class="file{{if eq .Link $.Active}} active{{end}}"><a href="{{.Link}}" title="{{.Label}}" class="row">{{.Name}}</a><span class="sz">{{.Size}}</span></li>
 {{end}}</ul>{{end}}`
 
 const playerSrc = `{{define "player"}}<!doctype html>
@@ -35,36 +89,35 @@ const playerSrc = `{{define "player"}}<!doctype html>
 <meta name="robots" content="noindex, nofollow">
 <title>{{.Title}}</title>
 <style>
-  :root { color-scheme: dark; }
-  body { margin:0; background:#111; color:#e8e8e8; font:15px/1.6 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
-         display:flex; min-height:100vh; }
-  main { flex:1; min-width:0; display:flex; flex-direction:column; align-items:center; padding:24px; box-sizing:border-box; }
-  h1 { font-size:16px; font-weight:600; margin:0 0 16px; opacity:.85; word-break:break-all; text-align:center; }
-  video { width:min(100%,1100px); max-height:78vh; background:#000; border-radius:10px; box-shadow:0 8px 30px rgba(0,0,0,.6); }
-  .row { display:flex; gap:12px; margin-top:14px; align-items:center; flex-wrap:wrap; justify-content:center; }
-  button, a.btn { background:#2a2a2a; color:#e8e8e8; border:1px solid #444; border-radius:8px; padding:8px 16px;
-         cursor:pointer; font-size:14px; text-decoration:none; }
-  button:hover, a.btn:hover { background:#333; }
+{{template "baseCSS"}}
+  body { display:flex; min-height:100vh; }
+  main { flex:1; min-width:0; display:flex; flex-direction:column; align-items:center; padding:22px 24px; }
+  main h1 { font-size:14px; font-weight:600; color:var(--dim); margin:0 0 14px; word-break:break-all; text-align:center; }
+  video { width:min(100%,1100px); max-height:78vh; background:#000; border-radius:10px; box-shadow:0 10px 34px rgba(0,0,0,.55); }
+  .row { display:flex; gap:10px; margin-top:14px; align-items:center; flex-wrap:wrap; justify-content:center; }
   .warn { display:none; margin-top:16px; max-width:760px; background:#3a2410; border:1px solid #7a4a12; color:#ffd9a0;
-          padding:12px 16px; border-radius:8px; font-size:14px; }
+          padding:12px 16px; border-radius:8px; font-size:13.5px; }
   .warn code { background:#00000055; padding:1px 5px; border-radius:4px; }
-  .hint { margin-top:10px; font-size:12.5px; opacity:.55; text-align:center; }
-  aside.tree { flex:0 0 264px; box-sizing:border-box; height:100vh; position:sticky; top:0; overflow:auto;
-               background:#151515; border-right:1px solid #262626; padding:14px 10px 28px; font-size:13.5px; }
-  aside.tree .libtitle { font-size:12.5px; opacity:.5; margin:0 0 10px 6px; }
-  aside.tree .libtitle a { color:#9ecb7a; text-decoration:none; }
-  aside.tree .libtitle a:hover { text-decoration:underline; }
+  .hint { margin-top:10px; font-size:12px; color:var(--dim); text-align:center; }
+  aside.tree { flex:0 0 272px; box-sizing:border-box; height:100vh; position:sticky; top:0; overflow:auto;
+               background:var(--bg-side); border-right:1px solid var(--line-soft); padding:12px 10px 28px; font-size:13px; }
+  aside.tree .sidehead { display:flex; align-items:center; justify-content:space-between; gap:8px; margin:0 2px 12px 4px; }
+  aside.tree .libtitle { font-size:12px; color:var(--dim); user-select:none; -webkit-user-select:none; }
+  aside.tree .sidehead a.btn { padding:3px 9px; min-height:22px; font-size:12px; }
 {{template "treeCSS"}}
   @media (max-width:820px) {
     body { flex-direction:column; }
     aside.tree { width:100%; flex:none; height:auto; max-height:34vh; position:static;
-                 border-right:none; border-bottom:1px solid #262626; }
+                 border-right:none; border-bottom:1px solid var(--line-soft); }
   }
 </style>
 </head>
 <body>
 {{if .HasTree}}<aside class="tree">
-  <div class="libtitle"><a href="/library">密档库 · {{.Count}} 个 · 换目录…</a></div>
+  <div class="sidehead">
+    <div class="libtitle">密档库 · {{.Count}} 个</div>
+    <a class="btn" href="/library">选择密档库…</a>
+  </div>
   {{template "tree" .Tree}}
 </aside>
 {{end}}<main>
@@ -80,7 +133,7 @@ const playerSrc = `{{define "player"}}<!doctype html>
   {{if .Back}}<a class="btn" href="{{.Back}}">← 返回列表</a>{{end}}
   <button id="lock">立即锁定并清理密钥</button>
 </div>
-<div class="hint">视频通过本机 127.0.0.1 环回解密播放；关闭命令行窗口即结束会话。{{if .HasTree}}左侧为密档目录树，点击即可切换片源；全屏播放时目录树自动隐藏。{{end}}</div>
+<div class="hint">视频通过本机 127.0.0.1 环回解密播放，明文不落盘。{{if .HasTree}}左侧为密档目录树，点击即可切换片源；全屏播放时目录树自动隐藏。{{end}}</div>
 </main>
 
 <script>
@@ -105,7 +158,6 @@ document.getElementById('lock').addEventListener('click', async () => {
   document.getElementById('lock').disabled = true;
   const msg = '已锁定：密钥已从内存清零。';
   document.querySelector('.hint').textContent = alive ? msg + '正在返回登录页…' : msg + '服务已关闭，可关闭此页面。';
-  alert(msg);
   if (alive) location.replace('/');
 });
 // 长目录树时把当前播放的条目滚进视野。
@@ -123,29 +175,29 @@ const indexSrc = `{{define "index"}}<!doctype html>
 <meta name="robots" content="noindex, nofollow">
 <title>go-safemedia 密档库</title>
 <style>
-  :root { color-scheme: dark; }
-  body { margin:0; background:#111; color:#e8e8e8; font:15px/1.6 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
-         display:flex; justify-content:center; padding:40px 24px; box-sizing:border-box; min-height:100vh; }
-  main { width:min(100%,820px); }
-  h1 { font-size:18px; margin:0 0 6px; }
-  p.sub { opacity:.55; font-size:13px; margin:0 0 22px; }
+{{template "baseCSS"}}
+  main { width:min(100%,var(--content)); margin:0 auto; padding:22px 24px 44px; }
+  p.sub { color:var(--dim); font-size:12.5px; margin:0 0 18px; }
   ul.tree { padding-left:0; }
-  .empty { border:1px dashed #3a3a3a; border-radius:10px; padding:26px; text-align:center; opacity:.6; }
-  .tools { margin:-8px 0 20px; font-size:13px; }
-  .tools a { color:#9ecb7a; text-decoration:none; }
-  .tools a:hover { text-decoration:underline; }
-  .foot { margin-top:22px; font-size:12.5px; opacity:.45; }
+  .empty { border:1px dashed var(--line); border-radius:10px; padding:30px; text-align:center; color:var(--dim); }
+  .empty code { margin:0 4px; }
+  .foot { margin-top:26px; font-size:12px; color:var(--dim); opacity:.8; user-select:none; -webkit-user-select:none; }
 {{template "treeCSS"}}
 </style>
 </head>
 <body>
+<header class="toolbar">
+  <div class="tbwrap">
+    <h1>密档库</h1>
+    <span class="grow"></span>
+    <a class="btn primary" href="/library">选择密档库…</a>
+  </div>
+</header>
 <main>
-  <h1>密档库</h1>
   <p class="sub">库根：<code>{{.Root}}</code> ｜ 共 {{.Count}} 个密档（含子目录）。条目只显示密档文件名，不包含原始视频名等元数据。</p>
-  <p class="tools"><a href="/library">选择密档库（换扫描目录）…</a></p>
   {{if .HasTree}}{{template "tree" .Tree}}
   {{else}}<div class="empty">这个目录里没有 .svid 密档。<br>先运行 <code>safemedia seal &lt;video&gt;</code> 封存视频。</div>{{end}}
-  <div class="foot">全部解密只在本机 127.0.0.1 环回进行；关闭命令行窗口即结束会话。</div>
+  <div class="foot">全部解密只在本机 127.0.0.1 环回进行，明文不落盘。</div>
 </main>
 </body>
 </html>{{end}}`
@@ -159,24 +211,20 @@ const loginSrc = `{{define "login"}}<!doctype html>
 <meta name="robots" content="noindex, nofollow">
 <title>go-safemedia 解锁</title>
 <style>
-  :root { color-scheme: dark; }
-  body { margin:0; min-height:100vh; background:#111; color:#e8e8e8;
-         font:15px/1.6 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
-         display:flex; align-items:center; justify-content:center; padding:24px; box-sizing:border-box; }
-  .card { width:min(100%,430px); background:#181818; border:1px solid #2a2a2a; border-radius:14px; padding:28px 26px 22px; }
-  h1 { font-size:18px; margin:0 0 8px; }
-  p.sub { opacity:.6; font-size:13px; margin:0 0 18px; word-break:break-all; }
-  label { display:block; font-size:13px; opacity:.7; margin-bottom:6px; }
-  input[type=password] { width:100%; box-sizing:border-box; background:#0e0e0e; color:#e8e8e8;
-        border:1px solid #3a3a3a; border-radius:8px; padding:10px 12px; font-size:15px; }
-  input[type=password]:focus { outline:none; border-color:#4a6b3a; }
-  button { margin-top:16px; width:100%; background:#2f4a25; color:#dff5d8; border:1px solid #4a6b3a;
-        border-radius:8px; padding:11px 16px; font-size:15px; cursor:pointer; }
-  button:hover { background:#3a5a2d; }
+{{template "baseCSS"}}
+  body { display:flex; align-items:center; justify-content:center; min-height:100vh; padding:28px; }
+  .card { width:min(100%,420px); background:var(--panel); border:1px solid #2e2e31; border-radius:12px;
+          padding:26px 24px 20px; box-shadow:0 22px 60px rgba(0,0,0,.45); }
+  .card h1 { font-size:16px; margin:0 0 6px; }
+  p.sub { color:var(--dim); font-size:12.5px; margin:0 0 18px; word-break:break-all; }
+  label { display:block; font-size:12.5px; color:var(--dim); margin:0 0 6px;
+          user-select:none; -webkit-user-select:none; }
+  button.primary { width:100%; margin-top:16px; padding:8px 14px; font-size:13.5px; }
   .err { margin:0 0 16px; background:#3a1a1a; border:1px solid #7a2a2a; color:#ffb0b0;
-        padding:10px 12px; border-radius:8px; font-size:13.5px; }
-  .hint { margin-top:16px; font-size:12.5px; opacity:.5; }
-  .redline { margin-top:12px; font-size:12px; opacity:.45; border-top:1px solid #262626; padding-top:12px; }
+         padding:10px 12px; border-radius:8px; font-size:13px; }
+  .hint { margin-top:14px; font-size:12px; color:var(--dim); }
+  .redline { margin-top:12px; font-size:11.5px; color:var(--dim); opacity:.85;
+             border-top:1px solid var(--line-soft); padding-top:12px; }
 </style>
 </head>
 <body>
@@ -186,7 +234,7 @@ const loginSrc = `{{define "login"}}<!doctype html>
   {{if .Err}}<p class="err">{{.Err}}</p>{{end}}
   <label for="password">账户口令</label>
   <input id="password" name="password" type="password" autofocus autocomplete="current-password" required>
-  <button type="submit">解锁并进入</button>
+  <button class="primary" type="submit">解锁并进入</button>
   <div class="hint">解密全部在本机 127.0.0.1 环回进行，明文不落盘；空闲超时或手动锁定后会回到本页。</div>
   <div class="redline">本工具只新建账户，绝不导入持有真实资产的钱包私钥/助记词。</div>
 </form>
@@ -204,49 +252,50 @@ const librarySrc = `{{define "library"}}<!doctype html>
 <meta name="robots" content="noindex, nofollow">
 <title>选择密档库</title>
 <style>
-  :root { color-scheme: dark; }
-  body { margin:0; background:#111; color:#e8e8e8; font:15px/1.6 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
-         display:flex; justify-content:center; padding:36px 24px; box-sizing:border-box; min-height:100vh; }
-  main { width:min(100%,780px); }
-  h1 { font-size:18px; margin:0 0 8px; }
-  p.sub { opacity:.6; font-size:13px; margin:0 0 16px; word-break:break-all; }
-  p.sub code { background:#00000055; padding:1px 6px; border-radius:5px; }
+{{template "baseCSS"}}
+  main { width:min(100%,var(--content)); margin:0 auto; padding:22px 24px 44px; }
+  p.sub { color:var(--dim); font-size:12.5px; margin:0 0 16px; word-break:break-all; }
   .err { margin:0 0 16px; background:#3a1a1a; border:1px solid #7a2a2a; color:#ffb0b0;
-         padding:10px 12px; border-radius:8px; font-size:13.5px; }
-  .crumbs { margin:0 0 12px; font-size:13px; opacity:.8; word-break:break-all; }
-  .crumbs a { color:#9ecb7a; text-decoration:none; }
-  .crumbs a:hover { text-decoration:underline; }
-  .crumbs .cur { opacity:.6; }
+         padding:10px 12px; border-radius:8px; font-size:13px; }
+  /* 面包屑：分段控件观感（无下划线、无链接色） */
+  .crumbs { display:flex; flex-wrap:wrap; align-items:center; gap:1px; margin:0 0 12px; font-size:12.5px;
+            user-select:none; -webkit-user-select:none; }
+  .crumbs a { padding:2px 7px; border-radius:5px; color:var(--text); text-decoration:none; cursor:pointer; }
+  .crumbs a:hover { background:#ffffff14; }
+  .crumbs .sep { color:var(--dim); opacity:.55; padding:0 1px; }
+  .crumbs .cur { color:var(--dim); padding:2px 7px; }
   .pathbar { display:flex; gap:8px; margin:0 0 14px; }
-  .pathbar input { flex:1; min-width:0; box-sizing:border-box; background:#0e0e0e; color:#e8e8e8; border:1px solid #3a3a3a;
-         border-radius:8px; padding:9px 11px; font-size:13px; font-family:ui-monospace,Menlo,monospace; }
-  .pathbar input:focus { outline:none; border-color:#4a6b3a; }
-  .pathbar button { background:#242424; color:#e8e8e8; border:1px solid #3a3a3a; border-radius:8px;
-         padding:9px 14px; font-size:13.5px; cursor:pointer; }
-  .pathbar button:hover { background:#2e2e2e; }
-  .actions { display:flex; align-items:center; gap:14px; margin:0 0 16px; flex-wrap:wrap; }
-  .primary { background:#2f4a25; color:#dff5d8; border:1px solid #4a6b3a; border-radius:8px;
-         padding:10px 16px; font-size:14px; cursor:pointer; }
-  .primary:hover { background:#3a5a2d; }
-  .up { color:#9ecb7a; text-decoration:none; font-size:13.5px; }
-  .meta { opacity:.55; font-size:12.5px; margin:0 0 14px; }
-  ul.dirs { list-style:none; margin:0; padding:0; border:1px solid #242424; border-radius:10px; overflow:hidden; }
-  ul.dirs li { display:flex; justify-content:space-between; gap:12px; padding:10px 14px; border-top:1px solid #1e1e1e; }
+  .pathbar input { font-family:ui-monospace,"SF Mono",Menlo,monospace; font-size:12.5px; }
+  .actions { display:flex; align-items:center; gap:10px; margin:0 0 16px; flex-wrap:wrap; }
+  .meta { color:var(--dim); font-size:12.5px; margin:0 0 12px; }
+  ul.dirs { list-style:none; margin:0; padding:0; background:var(--panel); border:1px solid var(--line-soft);
+            border-radius:10px; overflow:hidden; }
+  ul.dirs li { position:relative; display:flex; justify-content:space-between; align-items:baseline;
+               gap:12px; padding:8px 14px; border-top:1px solid #26262a; }
   ul.dirs li:first-child { border-top:none; }
-  ul.dirs a { color:#e8e8e8; text-decoration:none; }
-  ul.dirs a:hover { color:#9ecb7a; }
-  ul.dirs .n { opacity:.45; font-size:12.5px; white-space:nowrap; }
-  .empty { border:1px dashed #3a3a3a; border-radius:10px; padding:18px; text-align:center; opacity:.6; font-size:13.5px; }
-  .foot { margin-top:20px; font-size:12.5px; opacity:.55; }
-  .foot a { color:#9ecb7a; text-decoration:none; }
+  ul.dirs li:hover { background:#ffffff0d; }
+  ul.dirs li a { color:var(--text); text-decoration:none; }
+  ul.dirs li a::after { content:""; position:absolute; inset:0; } /* 整行可点 */
+  ul.dirs .n { color:var(--dim); font-size:12px; white-space:nowrap; user-select:none; -webkit-user-select:none; }
+  /* 目录行前置图标（原生文件夹观感），随文字基线对齐 */
+  ul.dirs .ico { flex:none; margin-right:8px; vertical-align:-2px; }
+  .empty { border:1px dashed var(--line); border-radius:10px; padding:22px; text-align:center;
+           color:var(--dim); font-size:13px; }
 </style>
 </head>
 <body>
+<header class="toolbar">
+  <div class="tbwrap">
+    <h1>选择密档库</h1>
+    <span class="grow"></span>
+    {{if .Up}}<a class="btn" href="{{.Up}}">↑ 上级目录</a>{{end}}
+    <a class="btn" href="/">← 返回密档库索引</a>
+  </div>
+</header>
 <main>
-  <h1>选择密档库</h1>
   <p class="sub">当前库根：<code>{{.Root}}</code></p>
   {{if .Err}}<p class="err">{{.Err}}</p>{{end}}
-  <nav class="crumbs">{{range .Crumbs}}{{if .Last}}<span class="cur">{{.Name}}</span>{{else}}<a href="{{.Link}}">{{.Name}}</a> / {{end}}{{end}}</nav>
+  <nav class="crumbs">{{range .Crumbs}}{{if .Last}}<span class="cur">{{.Name}}</span>{{else}}<a href="{{.Link}}">{{.Name}}</a><span class="sep">›</span>{{end}}{{end}}</nav>
   <form class="pathbar" method="get" action="/library">
     <input name="path" value="{{.Path}}" spellcheck="false" autocomplete="off" autocapitalize="off">
     <button type="submit">转到</button>
@@ -256,12 +305,10 @@ const librarySrc = `{{define "library"}}<!doctype html>
       <input type="hidden" name="path" value="{{.Path}}">
       <button class="primary" type="submit">使用此目录作为库根</button>
     </form>
-    {{if .Up}}<a class="up" href="{{.Up}}">↑ 上级目录</a>{{end}}
   </div>
   <p class="meta">本目录直接包含 {{.Vaults}} 个密档{{if .IsRoot}}；这就是当前库根{{else}}；选定后按子目录结构递归展示全部密档{{end}}。</p>
-  {{if .Dirs}}<ul class="dirs">{{range .Dirs}}<li><a href="{{.Link}}">{{.Name}}/</a><span class="n">{{.Vaults}} 个密档 · {{.SubDirs}} 个子目录</span></li>{{end}}</ul>
+  {{if .Dirs}}<ul class="dirs">{{range .Dirs}}<li><a href="{{.Link}}" class="row" title="{{.Name}}"><svg class="ico" viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M1.5 4.5c0-.8.6-1.4 1.4-1.4h2.8c.4 0 .8.2 1 .5l.9 1.1h5.5c.8 0 1.4.6 1.4 1.4v5.4c0 .8-.6 1.4-1.4 1.4H2.9c-.8 0-1.4-.6-1.4-1.4V4.5z" fill="#5f92d8" fill-opacity=".9"/></svg>{{.Name}}/</a><span class="n">{{.Vaults}} 个密档 · {{.SubDirs}} 个子目录</span></li>{{end}}</ul>
   {{else}}<div class="empty">这个目录下没有可进入的子目录。</div>{{end}}
-  <p class="foot"><a href="/">← 返回密档库索引</a></p>
 </main>
 </body>
 </html>{{end}}`
@@ -277,7 +324,7 @@ var pageTmpl = template.Must(template.New("pages").Funcs(template.FuncMap{
 	"nodeWith": func(ctx treeCtx, n treeNode) treeCtx {
 		return treeCtx{Node: n, Active: ctx.Active}
 	},
-}).Parse(treeCSS + treeTmpl + playerSrc + indexSrc + librarySrc + loginSrc))
+}).Parse(baseCSS + treeCSS + treeTmpl + playerSrc + indexSrc + librarySrc + loginSrc))
 
 // playerPage 渲染播放页。tree 为空则不显示左侧目录树（单密档模式）。
 // Title 做 HTML 转义（密档文件名可能含任意字符）；back 为空则不显示返回链接。

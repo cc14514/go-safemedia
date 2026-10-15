@@ -87,6 +87,7 @@
 - [x] T7.12 `internal/cli/play.go`：传 `Root`（不传 `OnLibraryChange`）。
 - [x] T7.13 `desktop/main.go`：始终库模式（单档取所在目录）+ `OnLibraryChange` 写 `desktop.json`（保留 `account`）。
 - [x] T7.14 文档：`README.md` / `docs/manual.md` 改为「在页面里选库」（不再要求编辑 JSON）、`dist` 的 `说明.txt`、`AGENTS.md` 结构/易错点。
+- [x] T7.15 `page_style_test.go`：页面外观守护 —— 四个页面均无裸 `<a>`（必带 class）与 `text-decoration:underline`；索引页主按钮为 `<a class="btn primary">`；按钮含 hover / 按下 / `focus-visible` 三态与 `user-select:none`；目录行整行可点；播放页侧栏换目录入口为按钮（AC7.9）；`page.go` 的 `baseCSS` 三态样式同步实现。
 
 ## 收尾
 
@@ -110,3 +111,5 @@
 6. **启动参数在 macOS 上不作依赖**（实测偏差，AC2.1）：`open -n -a safemedia.app --args <dir>` 与 `open -a <app> --args <dir>` 都**不把参数送达进程**（新实例的登录页仍显示默认库；另用裸二进制探针复核，argv 为空）。代码保留 argv 支持（仅**终端直接运行二进制**时有效，如 `make desktop-run ARGS=`），但**选库以 `desktop.json` 为准**；README / `docs/manual.md` / `dist` 的 `说明.txt` 中原先承诺的「拖放或 `open --args` 换库」已删除。→ 回流 `AGENTS.md` 易错点 8。
 7. **`.gitignore` 用根锚定 `/dist/`**：写成 `dist/` 会同时忽略 `desktop/frontend/dist/index.html`——它是 `//go:embed` 的**源码引导页**，被忽略则全新 clone 构建出的 `.app` 白屏。
 8. **`ditto -c -k --norsrc`** 而非 `--sequesterRsrc`：后者会在 zip 里写入 `__MACOSX/` 冗余条目。
+9. **页面外观重做（AC7.9，用户反馈「按钮太难看 + 出现超链接就露馅」）**：`page.go` 新增 `baseCSS`（四页共用：按钮/列表行/输入框/工具栏），导航与命令一律用 `<button>` 或 `<a class="btn">`，列表行 `<a class="row">` 整行可点；工具栏改为 `header.toolbar > .tbwrap`（与正文列同宽 `--content:840px`，标题与正文左对齐）；目录行加内联 SVG 文件夹图标。文案顺带去 CLI 化：删掉「关闭命令行窗口即结束会话」（外壳里无 CLI 窗口），改为「明文不落盘」。守护见 `internal/play/page_style_test.go`（T7.15）。
+10. **可视化外审流程（可复用）**：临时夹具把四页写到 `/tmp/…`（`go test -run TestZZVisualDump`）→ headless Chrome 截图（必须 `--no-sandbox --user-data-dir=<临时>`，本机无沙箱权限）→ 目视比对「是否像原生 app」。夹具用完即删，不入库。
