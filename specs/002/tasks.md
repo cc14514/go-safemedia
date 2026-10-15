@@ -68,6 +68,26 @@
 - [x] T5.2 该段含 Pre/Post 对比（登录前后、锁定前后、缓存目录扫描）。
 - [x] T5.3 `make test-l3` 生成 `tests/e2e/REPORT.md` 且全 PASS。
 
+## M7 · 库根目录选择器（US7，用户 2026-10-15 指示新增）
+
+### 测试（先写）
+- [x] T7.1 `internal/play/picker_test.go`：已解锁时 `GET /library` 返回选择页（当前库根、面包屑、子目录列表、每个子目录的密档数）；隐藏项与符号链接不列出（AC7.1/AC7.2）。
+- [x] T7.2 同上：`GET /library?path=<子目录>` 下钻、`?path=<不存在>` 显示中文错误且不 500（AC7.2/AC7.5）。
+- [x] T7.3 同上：`POST /library path=<新目录>` → 303 回 `/`，索引页立即按新的子目录结构展示（AC7.3）；重扫后条目 id 重新分配、媒体仍可播。
+- [x] T7.4 同上：非法路径（不存在 / 是文件 / 空串）→ 页面显示错误、**原库根与目录树不变**、不 panic（AC7.5）。
+- [x] T7.5 同上：`OnLibraryChange` 收到绝对路径；回调报错时页面可见且库根**已生效**（不静默丢选择）。
+- [x] T7.6 同上：**锁定态** `GET /library` 与 `POST /library` 都回登录页（AC7.6）；`-race` 下「切换库根 + 并发媒体请求」无数据竞争。
+- [x] T7.7 `desktop/main_test.go`：单密档目标 → 库根取其所在目录（AC7.7）；持久化回调写 `desktop.json` 且保留 `account`（AC7.4）。
+- [x] T7.8 `tests/integration/picker_flow_test.go`（L2）：锁定态起服务 → `POST /login` → 索引页 → `GET /library` → `POST /library` → 303 → 新树可点播 + 媒体 Range 成功（AC7.1–AC7.3）；CLI 浏览器模式同一页面可用但不持久化（AC7.8）。
+
+### 实现
+- [x] T7.9 `page.go`：新增 `librarySrc` 选择页模板（面包屑/路径输入/上级/子目录列表/「使用此目录作为库根」），索引页与播放页侧栏加「选择密档库」入口，索引页显示当前库根。
+- [x] T7.10 `library.go`：`LibraryOptions` 加 `Root`/`OnLibraryChange`；`SetRoot`（含 `~` 展开、目录校验、重扫、`l.mu` 串行化）；`GET/POST /library` handler；索引/播放/媒体读同一把锁。
+- [x] T7.11 `core.go`：登录页目标文案可更新（`setTarget`）。
+- [x] T7.12 `internal/cli/play.go`：传 `Root`（不传 `OnLibraryChange`）。
+- [x] T7.13 `desktop/main.go`：始终库模式（单档取所在目录）+ `OnLibraryChange` 写 `desktop.json`（保留 `account`）。
+- [x] T7.14 文档：`README.md` / `docs/manual.md` 改为「在页面里选库」（不再要求编辑 JSON）、`dist` 的 `说明.txt`、`AGENTS.md` 结构/易错点。
+
 ## 收尾
 
 - [x] T6.1 `make test`（L1+L2）全绿（含 `-race`）。

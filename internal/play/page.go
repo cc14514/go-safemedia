@@ -52,6 +52,8 @@ const playerSrc = `{{define "player"}}<!doctype html>
   aside.tree { flex:0 0 264px; box-sizing:border-box; height:100vh; position:sticky; top:0; overflow:auto;
                background:#151515; border-right:1px solid #262626; padding:14px 10px 28px; font-size:13.5px; }
   aside.tree .libtitle { font-size:12.5px; opacity:.5; margin:0 0 10px 6px; }
+  aside.tree .libtitle a { color:#9ecb7a; text-decoration:none; }
+  aside.tree .libtitle a:hover { text-decoration:underline; }
 {{template "treeCSS"}}
   @media (max-width:820px) {
     body { flex-direction:column; }
@@ -62,7 +64,7 @@ const playerSrc = `{{define "player"}}<!doctype html>
 </head>
 <body>
 {{if .HasTree}}<aside class="tree">
-  <div class="libtitle">密档库 · {{.Count}} 个</div>
+  <div class="libtitle"><a href="/library">密档库 · {{.Count}} 个 · 换目录…</a></div>
   {{template "tree" .Tree}}
 </aside>
 {{end}}<main>
@@ -129,6 +131,9 @@ const indexSrc = `{{define "index"}}<!doctype html>
   p.sub { opacity:.55; font-size:13px; margin:0 0 22px; }
   ul.tree { padding-left:0; }
   .empty { border:1px dashed #3a3a3a; border-radius:10px; padding:26px; text-align:center; opacity:.6; }
+  .tools { margin:-8px 0 20px; font-size:13px; }
+  .tools a { color:#9ecb7a; text-decoration:none; }
+  .tools a:hover { text-decoration:underline; }
   .foot { margin-top:22px; font-size:12.5px; opacity:.45; }
 {{template "treeCSS"}}
 </style>
@@ -136,7 +141,8 @@ const indexSrc = `{{define "index"}}<!doctype html>
 <body>
 <main>
   <h1>密档库</h1>
-  <p class="sub">共 {{.Count}} 个密档（含子目录）。条目只显示密档文件名，不包含原始视频名等元数据。</p>
+  <p class="sub">库根：<code>{{.Root}}</code> ｜ 共 {{.Count}} 个密档（含子目录）。条目只显示密档文件名，不包含原始视频名等元数据。</p>
+  <p class="tools"><a href="/library">选择密档库（换扫描目录）…</a></p>
   {{if .HasTree}}{{template "tree" .Tree}}
   {{else}}<div class="empty">这个目录里没有 .svid 密档。<br>先运行 <code>safemedia seal &lt;video&gt;</code> 封存视频。</div>{{end}}
   <div class="foot">全部解密只在本机 127.0.0.1 环回进行；关闭命令行窗口即结束会话。</div>
@@ -188,6 +194,78 @@ const loginSrc = `{{define "login"}}<!doctype html>
 </body>
 </html>{{end}}`
 
+// librarySrc 是密档库目录选择页（US7）：像文件浏览器一样浏览目录、选定库根。
+// 只列目录名（不列文件），与 ScanLibrary 同口径跳过隐藏项与符号链接。
+const librarySrc = `{{define "library"}}<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>选择密档库</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin:0; background:#111; color:#e8e8e8; font:15px/1.6 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
+         display:flex; justify-content:center; padding:36px 24px; box-sizing:border-box; min-height:100vh; }
+  main { width:min(100%,780px); }
+  h1 { font-size:18px; margin:0 0 8px; }
+  p.sub { opacity:.6; font-size:13px; margin:0 0 16px; word-break:break-all; }
+  p.sub code { background:#00000055; padding:1px 6px; border-radius:5px; }
+  .err { margin:0 0 16px; background:#3a1a1a; border:1px solid #7a2a2a; color:#ffb0b0;
+         padding:10px 12px; border-radius:8px; font-size:13.5px; }
+  .crumbs { margin:0 0 12px; font-size:13px; opacity:.8; word-break:break-all; }
+  .crumbs a { color:#9ecb7a; text-decoration:none; }
+  .crumbs a:hover { text-decoration:underline; }
+  .crumbs .cur { opacity:.6; }
+  .pathbar { display:flex; gap:8px; margin:0 0 14px; }
+  .pathbar input { flex:1; min-width:0; box-sizing:border-box; background:#0e0e0e; color:#e8e8e8; border:1px solid #3a3a3a;
+         border-radius:8px; padding:9px 11px; font-size:13px; font-family:ui-monospace,Menlo,monospace; }
+  .pathbar input:focus { outline:none; border-color:#4a6b3a; }
+  .pathbar button { background:#242424; color:#e8e8e8; border:1px solid #3a3a3a; border-radius:8px;
+         padding:9px 14px; font-size:13.5px; cursor:pointer; }
+  .pathbar button:hover { background:#2e2e2e; }
+  .actions { display:flex; align-items:center; gap:14px; margin:0 0 16px; flex-wrap:wrap; }
+  .primary { background:#2f4a25; color:#dff5d8; border:1px solid #4a6b3a; border-radius:8px;
+         padding:10px 16px; font-size:14px; cursor:pointer; }
+  .primary:hover { background:#3a5a2d; }
+  .up { color:#9ecb7a; text-decoration:none; font-size:13.5px; }
+  .meta { opacity:.55; font-size:12.5px; margin:0 0 14px; }
+  ul.dirs { list-style:none; margin:0; padding:0; border:1px solid #242424; border-radius:10px; overflow:hidden; }
+  ul.dirs li { display:flex; justify-content:space-between; gap:12px; padding:10px 14px; border-top:1px solid #1e1e1e; }
+  ul.dirs li:first-child { border-top:none; }
+  ul.dirs a { color:#e8e8e8; text-decoration:none; }
+  ul.dirs a:hover { color:#9ecb7a; }
+  ul.dirs .n { opacity:.45; font-size:12.5px; white-space:nowrap; }
+  .empty { border:1px dashed #3a3a3a; border-radius:10px; padding:18px; text-align:center; opacity:.6; font-size:13.5px; }
+  .foot { margin-top:20px; font-size:12.5px; opacity:.55; }
+  .foot a { color:#9ecb7a; text-decoration:none; }
+</style>
+</head>
+<body>
+<main>
+  <h1>选择密档库</h1>
+  <p class="sub">当前库根：<code>{{.Root}}</code></p>
+  {{if .Err}}<p class="err">{{.Err}}</p>{{end}}
+  <nav class="crumbs">{{range .Crumbs}}{{if .Last}}<span class="cur">{{.Name}}</span>{{else}}<a href="{{.Link}}">{{.Name}}</a> / {{end}}{{end}}</nav>
+  <form class="pathbar" method="get" action="/library">
+    <input name="path" value="{{.Path}}" spellcheck="false" autocomplete="off" autocapitalize="off">
+    <button type="submit">转到</button>
+  </form>
+  <div class="actions">
+    <form method="post" action="/library">
+      <input type="hidden" name="path" value="{{.Path}}">
+      <button class="primary" type="submit">使用此目录作为库根</button>
+    </form>
+    {{if .Up}}<a class="up" href="{{.Up}}">↑ 上级目录</a>{{end}}
+  </div>
+  <p class="meta">本目录直接包含 {{.Vaults}} 个密档{{if .IsRoot}}；这就是当前库根{{else}}；选定后按子目录结构递归展示全部密档{{end}}。</p>
+  {{if .Dirs}}<ul class="dirs">{{range .Dirs}}<li><a href="{{.Link}}">{{.Name}}/</a><span class="n">{{.Vaults}} 个密档 · {{.SubDirs}} 个子目录</span></li>{{end}}</ul>
+  {{else}}<div class="empty">这个目录下没有可进入的子目录。</div>{{end}}
+  <p class="foot"><a href="/">← 返回密档库索引</a></p>
+</main>
+</body>
+</html>{{end}}`
+
 // treeCtx 是目录树模板的数据上下文：节点 + 当前高亮的条目链接。
 type treeCtx struct {
 	Node   treeNode
@@ -199,7 +277,7 @@ var pageTmpl = template.Must(template.New("pages").Funcs(template.FuncMap{
 	"nodeWith": func(ctx treeCtx, n treeNode) treeCtx {
 		return treeCtx{Node: n, Active: ctx.Active}
 	},
-}).Parse(treeCSS + treeTmpl + playerSrc + indexSrc + loginSrc))
+}).Parse(treeCSS + treeTmpl + playerSrc + indexSrc + librarySrc + loginSrc))
 
 // playerPage 渲染播放页。tree 为空则不显示左侧目录树（单密档模式）。
 // Title 做 HTML 转义（密档文件名可能含任意字符）；back 为空则不显示返回链接。
@@ -230,18 +308,57 @@ func playerPage(name, mediaPath, back string, tree treeNode, active string) stri
 	return b.String()
 }
 
-// indexPage 渲染目录索引页（按目录树分组，AC5.4）。
-func indexPage(tree treeNode) string {
+// indexPage 渲染目录索引页（按目录树分组，AC5.4）；root 为当前库根（US7 显示用）。
+func indexPage(tree treeNode, root string) string {
 	var b strings.Builder
 	err := pageTmpl.ExecuteTemplate(&b, "index", struct {
 		Tree    treeCtx
 		HasTree bool
 		Count   int
+		Root    string
 	}{
 		Tree:    treeCtx{Node: tree},
 		HasTree: !tree.empty(),
 		Count:   tree.count(),
+		Root:    root,
 	})
+	if err != nil {
+		return renderError(err)
+	}
+	return b.String()
+}
+
+// pickerCrumb 是目录选择页的面包屑片段（Last 为当前目录，不可点）。
+type pickerCrumb struct {
+	Name string
+	Link string
+	Last bool
+}
+
+// pickerDir 是目录选择页中的一个子目录。
+type pickerDir struct {
+	Name    string
+	Link    string
+	Vaults  int // 该子目录「直接」包含的密档数
+	SubDirs int // 该子目录「直接」包含的子目录数
+}
+
+// pickerView 是目录选择页的渲染数据（US7）。
+type pickerView struct {
+	Root   string
+	Path   string
+	Err    string
+	Up     string
+	IsRoot bool
+	Vaults int
+	Crumbs []pickerCrumb
+	Dirs   []pickerDir
+}
+
+// libraryPage 渲染密档库目录选择页。
+func libraryPage(v pickerView) string {
+	var b strings.Builder
+	err := pageTmpl.ExecuteTemplate(&b, "library", v)
 	if err != nil {
 		return renderError(err)
 	}

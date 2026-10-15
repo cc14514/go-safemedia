@@ -65,13 +65,15 @@ make desktop        # -> desktop/build/bin/safemedia.app
 make desktop-run    # 构建并直接运行
 ```
 
-**看哪个库**：密档库由 `~/.safemedia/desktop.json` 指定（最可靠的方式，双击即可生效）：
+**看哪个库**：打开后**在界面里选** —— 索引页点「选择密档库（换扫描目录）…」，像文件浏览器一样逐级进入目录（面包屑、上级、每个子目录显示直含密档数），点「使用此目录作为库根」立即按该目录的子目录结构重扫并展示；选择会被记住（写入 `~/.safemedia/desktop.json`），下次启动仍用它。
+
+默认库是 `~/.safemedia/library`（不存在时自动创建，空库会提示「没有密档」）。也可以直接手写配置（适合脚本化部署）：
 
 ```json
 { "library": "/Users/you/vaults" }
 ```
 
-不配就用默认库 `~/.safemedia/library`（不存在时自动创建，空库会提示「没有密档」）。要用另一个库改这一行即可，也可以加 `"account"` 指定别的账户文件（默认 `~/.safemedia/keystore.json`）。
+配置文件里还可以加 `"account"` 指定别的账户文件（默认 `~/.safemedia/keystore.json`）。
 
 > 从源码调试时可以直接带参数启动（`make desktop-run ARGS=~/vaults`）；但**双击启动的 `.app` 不会收到启动参数**（macOS 经 LaunchServices 启动时不送达），所以选库请用上面的配置文件。封存视频、新建账户、恢复账户仍然用 CLI（`safemedia seal` / `safemedia account create`）。
 

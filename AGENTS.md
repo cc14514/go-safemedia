@@ -79,8 +79,8 @@ tests/e2e/           L3 端到端 + REPORT.md + fetch-samples.sh
 4. **`html/template`：`{{template "x" .}}` 里的 `$` 是「本次调用的数据」，不是 `ExecuteTemplate` 的根数据**。递归模板必须显式传上下文（本仓库 `treeCtx` + `nodeWith`），否则 `$.Field` 解析到子节点并报 `can't evaluate field`。
 5. **不要 `_ = tmpl.Execute(...)`**：模板执行错误会静默把页面截断成半页（曾致播放页只渲染一半且无报错）。渲染失败必须可见（`renderError`）。
 6. **桌面外壳没有任何自动解锁路径，但起真实 `.app` 做冒烟测试会在用户屏幕上弹窗**：用户很可能直接在里面输入口令，此时观察到的「已解锁」是**用户操作**，不是测试结果（曾据此误判为 bug、排查数轮）。要断言解锁语义就用 `tests/integration/desktop_flow_test.go` 的进程内灰盒；起真 `.app` 只用来确认「窗口能看到页面」。
-7. **清密钥必须与解密读取互斥**：`vault.Reader.ReadAt`（解密读）与 `Wipe`（锁定时清零文件密钥）、`play.Library` 的「锁内取私钥启封」与 `wipe()` 都必须串行化，否则 `-race` 报数据竞争（软锁定恰恰会「边流边清零」，必现）。改门控/锁定后跑 `go test -race ./internal/play/...`。
-8. **桌面 `.app` 收不到启动参数**：macOS 经 LaunchServices 启动（双击 / `open`）时 argv 不送达（实测 macOS 27：`open -n -a safemedia.app --args <dir>` 的新实例仍用默认库）。选库一律走 `~/.safemedia/desktop.json` 的 `library`；argv 只在终端直接运行二进制时有效（`make desktop-run ARGS=`）。别在文档里承诺「拖放/`open --args` 换库」。
+7. **清密钥/换库根必须与读取互斥**：`vault.Reader.ReadAt`（解密读）与 `Wipe`（锁定时清零文件密钥）、`play.Library` 的「锁内取私钥启封」与 `wipe()`、`handleIndex` 读 `tree/root` 与 `SetRoot` 的原子替换，都必须串行化；漏一处 `-race` 就报竞争（软锁定「边流边清零」与并发换库根必现）。改门控/锁定/库根后跑 `go test -race ./internal/play/...`。
+8. **桌面 `.app` 收不到启动参数**：macOS 经 LaunchServices 启动（双击 / `open`）时 argv 不送达（实测 macOS 27：`open -n -a safemedia.app --args <dir>` 的新实例仍用默认库）。**选库以界面里的「选择密档库」为准**（会写回 `~/.safemedia/desktop.json`），也支持手写该文件的 `library`；argv 只在终端直接运行二进制时有效（`make desktop-run ARGS=`）。别在文档里承诺「拖放/`open --args` 换库」。
 
 ## 目录树 / 播放页（目录模式）要点
 
@@ -94,6 +94,7 @@ tests/e2e/           L3 端到端 + REPORT.md + fetch-samples.sh
 - 外壳**零 UI、零逻辑**：只做「解账户（登录页回调）→ 起 loopback 服务 → 把系统 webview 指向它」；目录树/播放页/空闲锁定全部复用 `internal/play` 的既有页面。引导页 `desktop/frontend/dist/index.html` 由 `assetserver.Options.Middleware` 把 `__BOOT__` 换成 JSON（url 或 error），出错时窗口里显示中文原因而不是白屏。
 - **锁定语义靠 `SoftLock`**：外壳传 `true`（锁定回登录页、端口存活、可再次解锁）；CLI 不传（零值 = 锁定时关停，行为与改动前一致）。改 `internal/play` 门控后**必须同时验证两条语义**（CLI 回归 + 外壳链路）。
 - 登录流程：`GET /login`（表单）→ `POST /login` → 会话 cookie `sv_session`；会话启用时内容路由校验该 cookie，锁定态访问媒体路径 403（不 panic）。
+- **库根在页面里可换**（US7）：索引页 → `/library` 目录选择页（逐级浏览 + 每目录直含密档数）→ `POST /library` → `SetRoot` 规范路径、重扫、原子替换 root/tree/byID/order（`id` 重新分配）→ 回调 `LibraryOptions.OnLibraryChange`（外壳写 `desktop.json` 并保留 account 字段；CLI 不传该回调，选择只对本次会话有效）。非法路径**不改动任何状态**、在页面内显示中文原因；`~` 会展开、相对路径规范为绝对路径。锁定态一律回登录页（不枚举本机目录）。
 - 分发：`make desktop` → `make dist`（`.app` + CLI 打成 zip）→ `make release`（`gh`）。首版仅 macOS/arm64、不签名不公证；arm64 上 Go 自动 ad-hoc 签名，用户只需 `xattr -dr com.apple.quarantine`。
 - **明文红线在 webview 缓存上已验证**：WKWebView 用持久化数据仓库（`~/Library/Caches/<bundle-id>/WebKit`、`~/Library/WebKit/<bundle-id>`），但它尊重 `Cache-Control: no-store`——对照实验（可缓存对照有残留、引擎 `no-store` 响应与真实 mp4 流零残留）见 `tests/e2e/REPORT.md` 的 002 段。**改播放页/媒体响应头时不得去掉 `no-store`。**
 

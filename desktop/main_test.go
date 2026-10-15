@@ -4,9 +4,71 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/cc14514/go-safemedia/internal/desktopcfg"
 )
+
+// T7.7：外壳始终以「库模式」构造引擎——单密档目标取其所在目录为库根（AC7.7），
+// 这样页面上的目录选择器与目录树在任何启动方式下都可用；引擎仍以锁定态起步（AC1.1）。
+func TestBuildEngineUsesLibraryModeForFileTarget(t *testing.T) {
+	home := t.TempDir()
+	dir := t.TempDir()
+	clip := filepath.Join(dir, "clip.mp4")
+	if err := os.WriteFile(clip, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	eng, label, err := buildEngine(desktopcfg.Target{
+		Kind:    desktopcfg.KindFile,
+		Path:    clip,
+		Account: filepath.Join(home, "keystore.json"),
+	}, home, desktopcfg.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+
+	if label != filepath.Base(dir) {
+		t.Fatalf("窗口标签 = %q，期望 %q", label, filepath.Base(dir))
+	}
+	rooted, ok := eng.(interface{ Root() string })
+	if !ok {
+		t.Fatalf("引擎未以库模式构造：%T", eng)
+	}
+	if rooted.Root() != dir {
+		t.Fatalf("库根 = %q，期望单密档所在目录 %q", rooted.Root(), dir)
+	}
+	if !eng.Locked() {
+		t.Fatal("引擎应以锁定态起步（先出登录页）")
+	}
+}
+
+// T7.7：页面里换目录后，选择要写回 desktop.json 并保留同文件的 account（AC7.4）。
+func TestPersistLibraryWritesDesktopJSONKeepingAccount(t *testing.T) {
+	home := t.TempDir()
+	cfg := desktopcfg.Config{Library: "/old/library", Account: "/tmp/keep-account.json"}
+	if err := desktopcfg.Save(home, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := persistLibrary(home, cfg)("/new/library"); err != nil {
+		t.Fatalf("persistLibrary 失败: %v", err)
+	}
+	got, err := desktopcfg.Load(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Library != "/new/library" {
+		t.Fatalf("desktop.json 的 library = %q，期望 /new/library", got.Library)
+	}
+	if got.Account != "/tmp/keep-account.json" {
+		t.Fatalf("写入库根时改动了 account：%q", got.Account)
+	}
+}
 
 // T3.1：引导页必须拿到运行时注入的地址（否则窗口停在空白引导页）。
 func TestRenderBootstrapInjectsURL(t *testing.T) {

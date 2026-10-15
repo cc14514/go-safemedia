@@ -93,6 +93,15 @@ internal/cli/                 CLI：保持「终端口令 → 预解锁起服务
 - 不需要 Node：前端只有一个内嵌引导页（`wails build -s`）。
 - 外壳**不实现**封存 / 建账户 / 恢复 / mpv（Scope、AC6.3）。
 
+### 6b. 库根目录选择器（US7，引擎侧实现，外壳零逻辑）
+
+- **路由**：`GET /library?path=<dir>` 目录选择页（面包屑 + 上级 + 子目录列表；只列目录、跳过隐藏项与符号链接，与 `ScanLibrary` 同口径；每个子目录显示其**直接**包含的密档数与子目录数）；`POST /library`（表单字段 `path`）切换库根。
+- **`LibraryOptions` 新增**：`Root string`（当前库根，供选择页显示与下钻）与 `OnLibraryChange func(root string) error`（持久化回调；nil = 只在本会话生效）。
+- **`Library.SetRoot(root)`**：`filepath.Abs` + 展开 `~` → 必须是存在的目录 → `ScanLibrary` 重扫 → 在同一把 `l.mu` 下重建 `byID/order/tree/root` 并刷新登录页目标文案；失败**不改动**任何现有状态。索引页/播放页/媒体请求读同一把锁（`-race` 必过）。
+- **门控**：两个路由都挂在 `gate` 之内 → 锁定态自动回落登录页（AC7.6、NFR-8 不允许锁定态枚举目录）。
+- **持久化**：外壳注入回调写 `~/.safemedia/desktop.json` 的 `library`（读改写，保留 `account`；写失败要在页面上可见，不静默丢选择）；CLI 传 nil（AC7.8）。
+- **外壳始终库模式**（AC7.7）：单密档目标取 `filepath.Dir(path)` 为库根，使目录选择器在任何启动方式下都可用；CLI 的单档模式（`play.Options`）保持不变。
+
 ## 7. CLI 改动（保持行为不变 = AC6.2）
 
 - `internal/cli/play.go`：构造服务时**不传 `SoftLock`**（零值 = 锁定时关停，与改动前一致），走**预解锁**路径（先 `unlockAccount()` 再 `vault.Open` / `NewLibrary`），**不暴露登录页**；输出与退出码不变。

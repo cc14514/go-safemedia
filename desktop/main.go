@@ -29,7 +29,6 @@ import (
 	"github.com/cc14514/go-safemedia/internal/account"
 	"github.com/cc14514/go-safemedia/internal/desktopcfg"
 	"github.com/cc14514/go-safemedia/internal/play"
-	"github.com/cc14514/go-safemedia/internal/vault"
 	"github.com/cc14514/go-safemedia/internal/version"
 )
 
@@ -126,7 +125,7 @@ func prepare(app *App, home string) (url, label string, err error) {
 	if err != nil {
 		return "", "", err
 	}
-	eng, label, err := buildEngine(target)
+	eng, label, err := buildEngine(target, home, cfg)
 	if err != nil {
 		return "", "", err
 	}
@@ -158,58 +157,49 @@ func appArgs() []string {
 	return out
 }
 
-// buildEngine 按目标形态构造引擎（锁定态启动：先出登录页，解锁后才解密）。
-func buildEngine(target desktopcfg.Target) (engine, string, error) {
-	load := passphraseLoader(target.Account)
-
-	switch target.Kind {
-	case desktopcfg.KindFile:
-		name := filepath.Base(target.Path)
-		srv, err := play.New(play.Options{
-			Name:        name,
-			IdleTimeout: play.DefaultIdleTimeout,
-			SoftLock:    true, // 锁定后回到登录页，而不是关停（AC3.1/AC3.2）
-			Unlock: func(password string) (string, *vault.Reader, error) {
-				acct, err := load(password)
-				if err != nil {
-					return "", nil, err
-				}
-				r, err := vault.Open(target.Path, acct.PrivateKey())
-				if err != nil {
-					return "", nil, err
-				}
-				return name, r, nil
-			},
-		})
-		if err != nil {
-			return nil, "", err
-		}
-		return srv, name, nil
-
-	case desktopcfg.KindLibrary:
-		entries, err := play.ScanLibrary(target.Path)
-		if err != nil {
-			return nil, "", err
-		}
-		lib, err := play.NewLibrary(play.LibraryOptions{
-			Entries:     entries,
-			Target:      target.Path,
-			IdleTimeout: play.DefaultIdleTimeout,
-			SoftLock:    true,
-			Unlock: func(password string) (*ecdsa.PrivateKey, error) {
-				acct, err := load(password)
-				if err != nil {
-					return nil, err
-				}
-				return acct.PrivateKey(), nil
-			},
-		})
-		if err != nil {
-			return nil, "", err
-		}
-		return lib, filepath.Base(target.Path), nil
+// buildEngine 以「库模式」构造引擎（US7 / AC7.7）：目录目标直接用其路径，
+// 单密档目标取其所在目录——这样目录选择器与目录树在任何启动方式下都可用。
+// 引擎以锁定态启动：先出登录页，解锁后才解密。
+func buildEngine(target desktopcfg.Target, home string, cfg desktopcfg.Config) (engine, string, error) {
+	root := target.Path
+	if target.Kind == desktopcfg.KindFile {
+		root = filepath.Dir(target.Path)
 	}
-	return nil, "", fmt.Errorf("不支持的目标类型 %q", target.Kind)
+	entries, err := play.ScanLibrary(root)
+	if err != nil {
+		return nil, "", err
+	}
+	load := passphraseLoader(target.Account)
+	lib, err := play.NewLibrary(play.LibraryOptions{
+		Entries:     entries,
+		Target:      root,
+		Root:        root,
+		IdleTimeout: play.DefaultIdleTimeout,
+		SoftLock:    true, // 锁定后回到登录页，而不是关停（AC3.1/AC3.2）
+		Unlock: func(password string) (*ecdsa.PrivateKey, error) {
+			acct, err := load(password)
+			if err != nil {
+				return nil, err
+			}
+			return acct.PrivateKey(), nil
+		},
+		// 页面里换目录后记住选择（AC7.4）。
+		OnLibraryChange: persistLibrary(home, cfg),
+	})
+	if err != nil {
+		return nil, "", err
+	}
+	return lib, filepath.Base(root), nil
+}
+
+// persistLibrary 返回「把新库根写回 desktop.json」的回调，保留同文件里的 account。
+// 写失败会作为错误返回给页面（不静默丢选择，AC7.4）。
+func persistLibrary(home string, cfg desktopcfg.Config) func(string) error {
+	return func(root string) error {
+		next := cfg
+		next.Library = root
+		return desktopcfg.Save(home, next)
+	}
 }
 
 // passphraseLoader 返回「口令 → 账户」的加载器。

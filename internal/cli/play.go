@@ -142,6 +142,8 @@ func playDirectory(out io.Writer, dir string, priv *ecdsa.PrivateKey, player str
 	lib, err := play.NewLibrary(play.LibraryOptions{
 		Priv:        priv,
 		Entries:     entries,
+		Root:        dir,
+		Target:      dir,
 		IdleTimeout: idle,
 		OnLock:      lockReporter(out),
 	})

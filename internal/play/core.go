@@ -21,6 +21,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -59,6 +60,8 @@ type core struct {
 	unlockFn    func(password string) error
 	session     string
 
+	targetMu sync.RWMutex // 保护 target（US7：切换库根后登录页文案要跟着变）
+
 	last     atomic.Int64 // 最近一次请求时间（UnixNano）
 	locked   atomic.Bool  // 密钥已清零（需要再次解锁）
 	unlocked atomic.Bool  // 密钥在内存
@@ -95,6 +98,20 @@ func newCore(cfg coreConfig) *core {
 }
 
 func (c *core) touch() { c.last.Store(c.now().UnixNano()) }
+
+// setTarget 更新登录页展示的目标描述（US7：切换库根后调用）。
+func (c *core) setTarget(t string) {
+	c.targetMu.Lock()
+	c.target = t
+	c.targetMu.Unlock()
+}
+
+// loginTarget 返回当前目标描述。
+func (c *core) loginTarget() string {
+	c.targetMu.RLock()
+	defer c.targetMu.RUnlock()
+	return c.target
+}
 
 // start 在 127.0.0.1 随机端口启动。
 func (c *core) start(h http.Handler) (string, error) {
@@ -243,7 +260,7 @@ func (c *core) sessionOK(r *http.Request) bool {
 func (c *core) renderLogin(w http.ResponseWriter, errMsg string) {
 	writeNoCacheHeaders(w)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprint(w, loginPage(c.target, errMsg))
+	fmt.Fprint(w, loginPage(c.loginTarget(), errMsg))
 }
 
 // handleLogin 处理登录页：GET 渲染表单，POST 校验口令并解锁。

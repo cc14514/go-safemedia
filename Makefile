@@ -78,13 +78,14 @@ dist: desktop
 	  'go-safemedia $(VERSION) — $(ARCH)' \
 	  '' \
 	  '包含：' \
-	  '  safemedia.app   桌面外壳（双击运行；密档库由 ~/.safemedia/desktop.json 的 library 指定，默认 ~/.safemedia/library）' \
+	  '  safemedia.app   桌面外壳（双击运行；打开后在索引页点「选择密档库」即可换扫描目录，选择会被记住）' \
+	  '                  （默认库 ~/.safemedia/library，可用 ~/.safemedia/desktop.json 的 library 预设）' \
 	  '  safemedia       命令行（封存/建账户/播放）' \
 	  '' \
 	  '首次使用：' \
 	  '  1) 终端执行：./safemedia account create      # 新建账户，抄写助记词' \
 	  '  2) 封存视频：./safemedia seal ~/Movies/a.mp4 -o ~/.safemedia/library/a.svid' \
-	  '  3) 双击 safemedia.app，输入口令解锁后点选播放' \
+	  '  3) 双击 safemedia.app，输入口令解锁后点选播放；换目录用索引页的「选择密档库」' \
 	  '' \
 	  '若双击提示「无法打开，因为它来自身份不明的开发者」：' \
 	  '  这是未签名分发的正常现象（本版本不做签名公证）。在终端执行一次：' \
