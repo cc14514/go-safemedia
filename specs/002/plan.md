@@ -35,7 +35,7 @@ desktop/                      Wails 外壳（同模块，直接 import internal/
   wails.json
   frontend/dist/index.html    引导页（含 __LOOPBACK_URL__ 占位，运行时注入）
 internal/play/                引擎：新增「门（gate）」= 登录页 + 软锁定 + 三态生命周期
-internal/cli/                 CLI：保持「终端口令 → 预解锁起服务」，closeOnLock=true
+internal/cli/                 CLI：保持「终端口令 → 预解锁起服务」，不传 SoftLock（零值 = 锁定即关停）
 ```
 
 单文件形态与目录形态**共用同一个门控**（`core`）。外壳不放任何业务逻辑：窗口只负责「起服务 / 加载 URL / 关服务」。
@@ -52,8 +52,8 @@ internal/cli/                 CLI：保持「终端口令 → 预解锁起服务
 | **Unlocked** | 密钥在内存 | 服务内容路由 |
 | **Closed** | 终态 | 已关停，返回 410 |
 
-- `core` 新增：`unlocked atomic.Bool`、`closed atomic.Bool`、`closeOnLock bool`、会话值。
-- `core.lock(reason)`：清零密钥 + 置 Locked；**若 `closeOnLock`** 则 shutdown 并置 Closed（CLI，行为同 AC8.2）；否则保持存活（外壳，AC3.1/3.2）。
+- `core` 新增：`unlocked atomic.Bool`、`closed atomic.Bool`、`softLock bool`（参数名以实现为准，见 `tasks.md` 对齐记录 1）、会话值。
+- `core.lock(reason)`：清零密钥 + 置 Locked；**`softLock=false`（零值）** 则 shutdown 并置 Closed（CLI，行为与改动前一致）；否则保持存活（外壳，AC3.1/3.2）。
 - 新增 `core.gate(content http.Handler) http.Handler` 取代现有 `c.wrap`：
 
 | 请求 | 状态 | 行为 |
@@ -162,11 +162,47 @@ release: dist             # gh release create v$(VERSION) dist/*.zip
 | **Wails v2** | 系统 webview 外壳；自带 `.app` 打包与原生对话框；同语言可直接 import 引擎；运行期不需要 Node | webview_go（窗口/打包全自写）、Swift+WKWebView（需 sidecar+IPC，仅 mac）、Tauri（需 Rust + Go sidecar）、Electron（150 MB） |
 | **引擎内新增「门 / 三态生命周期」** | 外壳要「登录前锁定、锁定后回登录页」，CLI 要「锁定即关停」；两者必须共用一套 `core`，否则红线（明文不落盘/只绑环回/清零）会有两份实现 | 外壳自己写登录页并另起一个服务（重复引擎逻辑、双份红线、两处易错） |
 
-## 14. 评审门
+## 14. 账户选择（US8：引擎侧渲染 + 外壳侧发现）
+
+**数据流**：外壳启动 → 扫描账户（`desktopcfg.ListAccounts`）→ 以 `[]play.AccountOption` 注入引擎 → 锁定态登录页渲染账户列表（首项默认选中）→ `POST /login` 带 `account` + `password` → 引擎**先校验标识在列表内**（不在则拒绝，不调回调）→ `Unlock(accountID, password)`（外壳按该路径加载 keystore）→ 成功 303 + 会话 cookie。
+
+**发现规则**（`internal/desktopcfg.ListAccounts(home, cfg)`）：
+
+1. `~/.safemedia/*.json`（顶层）；
+2. `~/.safemedia/accounts/*.json`（子目录，供多账户归置）；
+3. `cfg.Account` 指定的路径（可在数据目录之外，如 CLI 的 `--account`）。
+
+按绝对路径去重；**只有能解析出 `address` 的 keystore v3 才算账户**（`desktop.json`、任意 JSON 自动排除）；`desktop.json` 指定的账户排首位；每项 `{Path, Name, Address}`，`Name` = 文件名，短地址由 `ShortAddress` 生成（形如 `0x1a2b…9f8e`）。
+
+**引擎 API（`play.Options` 与 `play.LibraryOptions` 同形）**：
+
+```go
+type AccountOption struct{ ID, Label, Note string } // ID 不透明；外壳传 keystore 路径
+Accounts []AccountOption                            // 空 = 不渲染选择器（登录页仅口令）
+Unlock   func(accountID, password string) (...)      // 取代原 func(password)
+```
+
+- `len(Accounts) > 0` 时 `POST /login` 的 `account` 必须在列表内，否则渲染「请选择一个可用账户」且**不触发解锁回调**（AC8.4）。
+- 失败重绘时把上次提交的 `account` 保持为选中项（AC8.3）。
+- `len(Accounts) == 0` 时不渲染选择器、`accountID` 为空串透传——既有 ad-hoc 解锁路径（测试）行为不变。
+
+**安全边界**（AC8.7，与 NFR-8 同款）：
+
+- 账户发现在**外壳侧**启动时做一次；引擎不遍历文件系统，只渲染注入的列表。
+- 只读 keystore 的公开 `address` 字段，**不需要口令**；口令错误时提示「口令错误或与所选账户不匹配」（外壳把 `account.ErrWrongPassword` 包装为该中文文案）。
+- 锁定态登录页不列目录、不列密档；服务仍只绑 `127.0.0.1`，响应仍 `no-store`。
+- 外壳侧对 `accountID` 再校验一次（必须在其发现的集合内），防引擎被绕过时按任意路径加载。
+
+**文案精简（AC8.6）**：登录页删除 `hint` / `redline` 段落，只留 标题 / 库根 / 账户列表 / 口令 / 解锁按钮 / 失败原因；索引页删除「条目只显示密档文件名…」与脚注；播放页删除环回说明句（保留目录树操作提示）。红线提示仍在 `account create` 输出与文档中（宪法 III 不要求页面展示）。
+
+**风险**：R6 账户列表是**启动时快照**（运行中新增账户要重启）——记入 Scope「不含」，与库根扫描同口径。
+
+## 15. 评审门
 
 - [x] 确认引擎三态生命周期与 `SoftLock` 语义（CLI 保持关停，外壳软锁定回登录页）——已实现并过 L1/L2（参数名以实现为准，见 `tasks.md` 对齐记录）
-- [ ] 确认 webview 缓存策略（R1：前置验证 + 非持久化数据存储；不接受补丁式删缓存）
-- [ ] 确认 `dist` / `release` 目标与版本注入方式
-- [ ] 确认目标解析优先级（启动参数 > 配置 > 默认库）
+- [x] 确认 webview 缓存策略（R1）：**对照实验已证伪**——可缓存对照落入 `NetworkCache`（检索有效），引擎 `no-store` 响应与真实 mp4 流零残留；无需改用非持久化数据存储（证据见 `tests/e2e/REPORT.md` 002 段）
+- [x] 确认 `dist` / `release` 目标与版本注入方式（`make dist VERSION=` / `make release VERSION=`，`-ldflags -X`）
+- [x] 确认目标解析优先级（启动参数 > 配置 > 默认库）——**实测偏差**：macOS 经 LaunchServices 启动不送达 argv，故实际以界面内目录选择器 + `desktop.json` 为准（见 `tasks.md` 对齐记录 6）
+- [x] 确认 US8 账户选择范围：列表 = `~/.safemedia`（含 `accounts/`）+ 配置指定路径，启动时扫描一次；外壳不提供建账户 UI
 
 通过后 → `specs/002/tasks.md`（每个 User Story 的测试子任务排在实现子任务之前）。

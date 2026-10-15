@@ -16,6 +16,7 @@ import (
 	"crypto/ecdsa"
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -169,15 +170,31 @@ func buildEngine(target desktopcfg.Target, home string, cfg desktopcfg.Config) (
 	if err != nil {
 		return nil, "", err
 	}
-	load := passphraseLoader(target.Account)
+	// 登录页可选的本地账户（US8/FR-6.7）：只读 keystore 的公开地址，不需要口令。
+	discovered := desktopcfg.ListAccounts(home, cfg)
+	allowed := make(map[string]bool, len(discovered))
+	opts := make([]play.AccountOption, 0, len(discovered))
+	for _, a := range discovered {
+		allowed[a.Path] = true
+		opts = append(opts, play.AccountOption{ID: a.Path, Label: a.Name, Note: a.Short})
+	}
+	fallback := target.Account
 	lib, err := play.NewLibrary(play.LibraryOptions{
 		Entries:     entries,
 		Target:      root,
 		Root:        root,
+		Accounts:    opts,
 		IdleTimeout: play.DefaultIdleTimeout,
 		SoftLock:    true, // 锁定后回到登录页，而不是关停（AC3.1/AC3.2）
-		Unlock: func(password string) (*ecdsa.PrivateKey, error) {
-			acct, err := load(password)
+		Unlock: func(accountID, password string) (*ecdsa.PrivateKey, error) {
+			// 二次校验：即便引擎侧校验被绕过，也不按任意路径加载 keystore（AC8.7）。
+			if len(allowed) > 0 && !allowed[accountID] {
+				return nil, errors.New("请选择一个可用账户")
+			}
+			if accountID == "" {
+				accountID = fallback // 未发现账户（首次使用）时退回配置里的账户路径
+			}
+			acct, err := loadAccount(accountID, password)
 			if err != nil {
 				return nil, err
 			}
@@ -202,24 +219,26 @@ func persistLibrary(home string, cfg desktopcfg.Config) func(string) error {
 	}
 }
 
-// passphraseLoader 返回「口令 → 账户」的加载器。
+// loadAccount 用口令加载指定 keystore（accountPath 来自登录页的账户选择）。
 //
 // 口令字节用完立即清零；字符串本身（来自 HTTP 表单）无法清零，这是 Go 字符串的固有限制，
 // 与 CLI 路径一致（见 internal/cli/prompt.go）。
-func passphraseLoader(accountPath string) func(string) (*account.Account, error) {
-	return func(password string) (*account.Account, error) {
-		pass := []byte(password)
-		defer account.Wipe(pass)
+func loadAccount(accountPath, password string) (*account.Account, error) {
+	pass := []byte(password)
+	defer account.Wipe(pass)
 
-		if _, err := os.Stat(accountPath); err != nil {
-			return nil, fmt.Errorf("找不到账户文件 %s：请先用命令行执行 `safemedia account create` 新建账户", accountPath)
-		}
-		acct, err := account.LoadKeystoreWithPassphrase(accountPath, pass)
-		if err != nil {
-			return nil, err
-		}
-		return acct, nil
+	if _, err := os.Stat(accountPath); err != nil {
+		return nil, fmt.Errorf("找不到账户文件 %s：请先用命令行执行 `safemedia account create` 新建账户", accountPath)
 	}
+	acct, err := account.LoadKeystoreWithPassphrase(accountPath, pass)
+	if err != nil {
+		if errors.Is(err, account.ErrWrongPassword) {
+			// 多账户下最常见的原因就是「选错了账户」，文案要把两种可能都说清（AC8.3）。
+			return nil, errors.New("口令错误或与所选账户不匹配")
+		}
+		return nil, err
+	}
+	return acct, nil
 }
 
 // bootstrapMiddleware 把引导页交给 webview，并注入运行时信息。

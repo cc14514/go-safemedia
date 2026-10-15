@@ -41,10 +41,16 @@ const baseCSS = `{{define "baseCSS"}}
   button.primary:hover, a.btn.primary:hover { background:var(--accent-hi); }
   button.primary:active, a.btn.primary:active { background:#356529; }
 
-  input[type=password], input[type=text] { -webkit-appearance:none; appearance:none; width:100%;
+  input[type=password], input[type=text], select { -webkit-appearance:none; appearance:none; width:100%;
     background:var(--field); color:var(--text); border:1px solid #3c3c3f; border-radius:var(--radius);
     padding:7px 10px; font:inherit; }
-  input:focus { outline:none; border-color:var(--focus); box-shadow:0 0 0 3px #4d8de033; }
+  /* 下拉框保持系统控件观感：深色底 + 右侧自绘指示符（不加装饰） */
+  select { padding-right:26px; background-image:linear-gradient(45deg,transparent 50%,#9b9ba1 50%),
+    linear-gradient(135deg,#9b9ba1 50%,transparent 50%);
+    background-position:calc(100% - 15px) 54%, calc(100% - 10px) 54%; background-size:5px 5px, 5px 5px;
+    background-repeat:no-repeat; }
+  input:focus, select:focus { outline:none; border-color:var(--focus); box-shadow:0 0 0 3px #4d8de033; }
+  select:focus-visible { outline:2px solid var(--focus); outline-offset:2px; }
 
   /* 窗口顶部工具栏：像原生窗口的一行控件；内容与正文列左对齐 */
   header.toolbar { display:block; padding:9px 24px; background:var(--panel);
@@ -133,7 +139,7 @@ const playerSrc = `{{define "player"}}<!doctype html>
   {{if .Back}}<a class="btn" href="{{.Back}}">← 返回列表</a>{{end}}
   <button id="lock">立即锁定并清理密钥</button>
 </div>
-<div class="hint">视频通过本机 127.0.0.1 环回解密播放，明文不落盘。{{if .HasTree}}左侧为密档目录树，点击即可切换片源；全屏播放时目录树自动隐藏。{{end}}</div>
+<div class="hint" id="status"></div>
 </main>
 
 <script>
@@ -181,7 +187,6 @@ const indexSrc = `{{define "index"}}<!doctype html>
   ul.tree { padding-left:0; }
   .empty { border:1px dashed var(--line); border-radius:10px; padding:30px; text-align:center; color:var(--dim); }
   .empty code { margin:0 4px; }
-  .foot { margin-top:26px; font-size:12px; color:var(--dim); opacity:.8; user-select:none; -webkit-user-select:none; }
 {{template "treeCSS"}}
 </style>
 </head>
@@ -194,10 +199,9 @@ const indexSrc = `{{define "index"}}<!doctype html>
   </div>
 </header>
 <main>
-  <p class="sub">库根：<code>{{.Root}}</code> ｜ 共 {{.Count}} 个密档（含子目录）。条目只显示密档文件名，不包含原始视频名等元数据。</p>
+  <p class="sub">库根：<code>{{.Root}}</code> ｜ 共 {{.Count}} 个密档（含子目录）</p>
   {{if .HasTree}}{{template "tree" .Tree}}
   {{else}}<div class="empty">这个目录里没有 .svid 密档。<br>先运行 <code>safemedia seal &lt;video&gt;</code> 封存视频。</div>{{end}}
-  <div class="foot">全部解密只在本机 127.0.0.1 环回进行，明文不落盘。</div>
 </main>
 </body>
 </html>{{end}}`
@@ -219,24 +223,26 @@ const loginSrc = `{{define "login"}}<!doctype html>
   p.sub { color:var(--dim); font-size:12.5px; margin:0 0 18px; word-break:break-all; }
   label { display:block; font-size:12.5px; color:var(--dim); margin:0 0 6px;
           user-select:none; -webkit-user-select:none; }
-  button.primary { width:100%; margin-top:16px; padding:8px 14px; font-size:13.5px; }
+  button.primary { width:100%; margin-top:18px; padding:8px 14px; font-size:13.5px; }
   .err { margin:0 0 16px; background:#3a1a1a; border:1px solid #7a2a2a; color:#ffb0b0;
          padding:10px 12px; border-radius:8px; font-size:13px; }
-  .hint { margin-top:14px; font-size:12px; color:var(--dim); }
-  .redline { margin-top:12px; font-size:11.5px; color:var(--dim); opacity:.85;
-             border-top:1px solid var(--line-soft); padding-top:12px; }
+  .fld + .fld { margin-top:14px; }
 </style>
 </head>
 <body>
 <form class="card" method="post" action="/login">
   <h1>解锁密档</h1>
-  <p class="sub">{{if .Target}}目标：{{.Target}}{{else}}输入账户口令以启封播放；口令只用于本机解密。{{end}}</p>
+  <p class="sub">{{if .Target}}目标：{{.Target}}{{end}}</p>
   {{if .Err}}<p class="err">{{.Err}}</p>{{end}}
-  <label for="password">账户口令</label>
-  <input id="password" name="password" type="password" autofocus autocomplete="current-password" required>
-  <button class="primary" type="submit">解锁并进入</button>
-  <div class="hint">解密全部在本机 127.0.0.1 环回进行，明文不落盘；空闲超时或手动锁定后会回到本页。</div>
-  <div class="redline">本工具只新建账户，绝不导入持有真实资产的钱包私钥/助记词。</div>
+  {{if .Accounts}}<div class="fld">
+    <label for="account">账户</label>
+    <select id="account" name="account">{{range .Accounts}}<option value="{{.ID}}"{{if eq .ID $.Selected}} selected{{end}}>{{.Label}}{{if .Note}} — {{.Note}}{{end}}</option>{{end}}</select>
+  </div>{{end}}
+  <div class="fld">
+    <label for="password">账户口令</label>
+    <input id="password" name="password" type="password" autofocus autocomplete="current-password" required>
+  </div>
+  <button class="primary" type="submit">解锁</button>
 </form>
 <script>try { document.getElementById('password').focus(); } catch (e) {}</script>
 </body>
@@ -306,7 +312,7 @@ const librarySrc = `{{define "library"}}<!doctype html>
       <button class="primary" type="submit">使用此目录作为库根</button>
     </form>
   </div>
-  <p class="meta">本目录直接包含 {{.Vaults}} 个密档{{if .IsRoot}}；这就是当前库根{{else}}；选定后按子目录结构递归展示全部密档{{end}}。</p>
+  <p class="meta">本目录直接包含 {{.Vaults}} 个密档{{if .IsRoot}}；这就是当前库根{{end}}</p>
   {{if .Dirs}}<ul class="dirs">{{range .Dirs}}<li><a href="{{.Link}}" class="row" title="{{.Name}}"><svg class="ico" viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M1.5 4.5c0-.8.6-1.4 1.4-1.4h2.8c.4 0 .8.2 1 .5l.9 1.1h5.5c.8 0 1.4.6 1.4 1.4v5.4c0 .8-.6 1.4-1.4 1.4H2.9c-.8 0-1.4-.6-1.4-1.4V4.5z" fill="#5f92d8" fill-opacity=".9"/></svg>{{.Name}}/</a><span class="n">{{.Vaults}} 个密档 · {{.SubDirs}} 个子目录</span></li>{{end}}</ul>
   {{else}}<div class="empty">这个目录下没有可进入的子目录。</div>{{end}}
 </main>
@@ -412,15 +418,19 @@ func libraryPage(v pickerView) string {
 	return b.String()
 }
 
-// loginPage 渲染锁定态的登录页（target 为目标描述，errMsg 为上次失败原因）。
+// loginView 是登录页模板的数据。
+type loginView struct {
+	Target   string          // 目标描述（库根/密档名）
+	Err      string          // 上次失败原因
+	Accounts []AccountOption // 可选账户（空 = 不渲染选择器）
+	Selected string          // 上次提交的账户标识（重绘时保持选中）
+}
+
+// loginPage 渲染锁定态的登录页。
 // 与其它页面一致：模板执行失败必须可见（renderError），不得静默截断。
-func loginPage(target, errMsg string) string {
+func loginPage(v loginView) string {
 	var b strings.Builder
-	err := pageTmpl.ExecuteTemplate(&b, "login", struct {
-		Target string
-		Err    string
-	}{Target: target, Err: errMsg})
-	if err != nil {
+	if err := pageTmpl.ExecuteTemplate(&b, "login", v); err != nil {
 		return renderError(err)
 	}
 	return b.String()

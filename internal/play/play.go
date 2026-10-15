@@ -19,9 +19,13 @@ type Options struct {
 	// Name 是展示名（通常为密档文件名），同时作为登录页的目标描述。
 	Name string
 	// Unlock 是延迟解锁路径（桌面外壳）：服务以锁定态启动，
-	// 登录页提交口令后调用本回调取得 Reader。与 Reader 二选一。
-	// 回调实现方负责在内部使用后清零口令字节，且不得依赖 play 包。
-	Unlock func(password string) (name string, r *vault.Reader, err error)
+	// 登录页提交「账户 + 口令」后调用本回调取得 Reader。与 Reader 二选一。
+	// 回调实现方负责在内部使用后清零口令字节，且不得依赖 play 包；
+	// accountID 来自 Accounts 列表，调用前引擎已校验它在列表内。
+	Unlock func(accountID, password string) (name string, r *vault.Reader, err error)
+
+	// Accounts 是登录页可选的账户（空 = 不渲染选择器，只输入口令）。
+	Accounts []AccountOption
 
 	IdleTimeout time.Duration // 0 → DefaultIdleTimeout
 	Now         func() time.Time
@@ -71,6 +75,7 @@ func New(opts Options) (*Server, error) {
 		softLock:    opts.SoftLock,
 		mediaPrefix: "/media/" + token,
 		target:      opts.Name,
+		accounts:    opts.Accounts,
 		unlockFn:    s.doUnlock,
 		session:     session,
 		preUnlocked: opts.Reader != nil,
@@ -84,11 +89,11 @@ func New(opts Options) (*Server, error) {
 }
 
 // doUnlock 是门控的解锁回调：调用 Options.Unlock 并接管新 Reader。
-func (s *Server) doUnlock(password string) error {
+func (s *Server) doUnlock(accountID, password string) error {
 	if s.opts.Unlock == nil {
 		return fmt.Errorf("该服务未配置解锁方式")
 	}
-	name, r, err := s.opts.Unlock(password)
+	name, r, err := s.opts.Unlock(accountID, password)
 	if err != nil {
 		return err
 	}

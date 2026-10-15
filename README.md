@@ -47,6 +47,8 @@ safemedia play ~/vaults/clip.svid --player mpv      # 交给 mpv（HEVC 等）
 
 不想开终端就用桌面版：一个原生窗口套系统 webview，内部仍是同一个环回引擎，播放页与目录树完全一致（首次进入是登录页，输入账户口令后即可浏览与播放；空闲 30 分钟自动回到登录页）。
 
+登录页会在**下拉框里列出本机所有账户**（`~/.safemedia/*.json` 与 `~/.safemedia/accounts/*.json`；每项显示文件名 + 地址短形式），**必须选对账户并输入该账户的口令**才能解锁——选错账户不会解密任何内容，只会提示「口令错误或与所选账户不匹配」。
+
 **从 Release 安装**（推荐）：
 
 1. 下载 `safemedia_<版本>_darwin-arm64.zip` 并解压；
@@ -73,7 +75,7 @@ make desktop-run    # 构建并直接运行
 { "library": "/Users/you/vaults" }
 ```
 
-配置文件里还可以加 `"account"` 指定别的账户文件（默认 `~/.safemedia/keystore.json`）。
+配置文件里还可以加 `"account"` 指定别的账户文件（默认 `~/.safemedia/keystore.json`）；它同时决定登录页里默认选中的是哪个账户，其余账户只要放在 `~/.safemedia/accounts/` 下就会被自动列出（新建账户时用 `--account ~/.safemedia/accounts/工作.json` 即可归置）。
 
 > 从源码调试时可以直接带参数启动（`make desktop-run ARGS=~/vaults`）；但**双击启动的 `.app` 不会收到启动参数**（macOS 经 LaunchServices 启动时不送达），所以选库请用上面的配置文件。封存视频、新建账户、恢复账户仍然用 CLI（`safemedia seal` / `safemedia account create`）。
 

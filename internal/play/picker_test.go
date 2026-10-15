@@ -80,7 +80,7 @@ func newLockedPicker(t *testing.T, root string, priv *ecdsa.PrivateKey) *play.Li
 		Target:      root,
 		SoftLock:    true,
 		IdleTimeout: time.Minute,
-		Unlock: func(pw string) (*ecdsa.PrivateKey, error) {
+		Unlock: func(_, pw string) (*ecdsa.PrivateKey, error) {
 			if pw != testPassword {
 				return nil, errors.New("口令错误：无法解锁账户")
 			}

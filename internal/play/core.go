@@ -42,7 +42,8 @@ type coreConfig struct {
 	softLock    bool   // true = 锁定时不关停服务，回到登录页（桌面外壳）
 	mediaPrefix string // 媒体路由前缀（锁定态下对该前缀返回 403 而非登录页）
 	target      string // 登录页展示的目标描述
-	unlockFn    func(password string) error
+	accounts    []AccountOption
+	unlockFn    func(accountID, password string) error
 	session     string // 非空 → 解锁后内容路由要求该会话 cookie
 	preUnlocked bool   // 构造时已持有密钥（CLI/测试路径）
 }
@@ -57,10 +58,14 @@ type core struct {
 	softLock    bool
 	mediaPrefix string
 	target      string
-	unlockFn    func(password string) error
+	accounts    []AccountOption
+	unlockFn    func(accountID, password string) error
 	session     string
 
-	targetMu sync.RWMutex // 保护 target（US7：切换库根后登录页文案要跟着变）
+	// loginMu 保护登录页状态：target（US7 切换库根后文案要跟着变）与
+	// sel（US8 上次提交的账户 —— 校验失败重绘时必须保持选中）。
+	loginMu sync.RWMutex
+	sel     string
 
 	last     atomic.Int64 // 最近一次请求时间（UnixNano）
 	locked   atomic.Bool  // 密钥已清零（需要再次解锁）
@@ -88,6 +93,7 @@ func newCore(cfg coreConfig) *core {
 		softLock:    cfg.softLock,
 		mediaPrefix: cfg.mediaPrefix,
 		target:      cfg.target,
+		accounts:    cfg.accounts,
 		unlockFn:    cfg.unlockFn,
 		session:     cfg.session,
 	}
@@ -101,16 +107,30 @@ func (c *core) touch() { c.last.Store(c.now().UnixNano()) }
 
 // setTarget 更新登录页展示的目标描述（US7：切换库根后调用）。
 func (c *core) setTarget(t string) {
-	c.targetMu.Lock()
+	c.loginMu.Lock()
 	c.target = t
-	c.targetMu.Unlock()
+	c.loginMu.Unlock()
 }
 
 // loginTarget 返回当前目标描述。
 func (c *core) loginTarget() string {
-	c.targetMu.RLock()
-	defer c.targetMu.RUnlock()
+	c.loginMu.RLock()
+	defer c.loginMu.RUnlock()
 	return c.target
+}
+
+// setLoginSel 记录上次提交的账户标识（US8：校验失败重绘时保持选中）。
+func (c *core) setLoginSel(id string) {
+	c.loginMu.Lock()
+	c.sel = id
+	c.loginMu.Unlock()
+}
+
+// loginSel 返回上次提交的账户标识。
+func (c *core) loginSel() string {
+	c.loginMu.RLock()
+	defer c.loginMu.RUnlock()
+	return c.sel
 }
 
 // start 在 127.0.0.1 随机端口启动。
@@ -260,10 +280,25 @@ func (c *core) sessionOK(r *http.Request) bool {
 func (c *core) renderLogin(w http.ResponseWriter, errMsg string) {
 	writeNoCacheHeaders(w)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprint(w, loginPage(c.loginTarget(), errMsg))
+	sel := c.loginSel()
+	if _, ok := findAccount(c.accounts, sel); !ok {
+		// 没选过、或上次提交的标识已不在列表（例如被篡改）→ 回到首项，
+		// 使「默认选中第一项」在标记里也显式成立（AC8.1）。
+		if len(c.accounts) > 0 {
+			sel = c.accounts[0].ID
+		} else {
+			sel = ""
+		}
+	}
+	fmt.Fprint(w, loginPage(loginView{
+		Target:   c.loginTarget(),
+		Err:      errMsg,
+		Accounts: c.accounts,
+		Selected: sel,
+	}))
 }
 
-// handleLogin 处理登录页：GET 渲染表单，POST 校验口令并解锁。
+// handleLogin 处理登录页：GET 渲染表单；POST 先校验账户标识、再校验口令并解锁。
 func (c *core) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if c.unlocked.Load() {
 		http.Redirect(w, r, "/", http.StatusSeeOther)
@@ -281,11 +316,23 @@ func (c *core) handleLogin(w http.ResponseWriter, r *http.Request) {
 		c.renderLogin(w, "请求解析失败，请重试")
 		return
 	}
+	// ① 账户标识必须来自注入的列表，且校验发生在解锁回调之前：
+	//    被篡改的标识根本不会触达「按该标识读 keystore」的逻辑（AC8.4）。
+	accountID := r.PostFormValue("account")
+	if len(c.accounts) > 0 {
+		if _, ok := findAccount(c.accounts, accountID); !ok {
+			c.setLoginSel(accountID)
+			c.renderLogin(w, "请选择一个可用账户")
+			return
+		}
+	}
 	// 口令字节在解锁回调内部使用后即清零，此处不保留副本。
-	if err := c.unlockFn(r.PostFormValue("password")); err != nil {
+	if err := c.unlockFn(accountID, r.PostFormValue("password")); err != nil {
+		c.setLoginSel(accountID)
 		c.renderLogin(w, err.Error())
 		return
 	}
+	c.setLoginSel(accountID)
 	c.markUnlocked()
 	if c.session != "" {
 		http.SetCookie(w, &http.Cookie{

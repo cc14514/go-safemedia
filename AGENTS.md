@@ -40,10 +40,10 @@ SAFEMEDIA_E2E_NO_BROWSER=1 make test-l3      # 无 Chrome 时跳过真实解码�
 cmd/safemedia/       入口（只调 cli.Execute()）
 internal/account/    BIP-39/44 派生、keystore v3、口令强度
 internal/vault/      format.go 头部布局 / wrap.go 文件密钥封装 / vault.go Seal+Open+ReadAt / whitelist.go 容器嗅探
-internal/play/       core.go 单文件与目录共用的生命周期 / play.go 单文件 / library.go 目录模式 / page.go 模板
+internal/play/       core.go 单文件与目录共用的生命周期 / play.go 单文件 / library.go 目录模式 / accounts.go 账户列表 / page.go 模板
 internal/cli/        cobra 命令（中文输出）、prompt.go 交互、exit.go 退出码
 internal/version/    构建时注入的版本号（CLI 与外壳共用，见 Makefile 的 LDFLAGS）
-internal/desktopcfg/ 外壳的目标解析（启动参数 > desktop.json > 默认库）与配置读写
+internal/desktopcfg/ 外壳的目标解析（启动参数 > desktop.json > 默认库）、账户发现（accounts.go）与配置读写
 desktop/             Wails v2 外壳：main.go（接线）+ frontend/dist/index.html（引导页）+ wails.json
 tests/integration/   L2 黑盒/灰盒（进程内执行 CLI；desktop_flow_test.go 覆盖外壳链路）
 tests/e2e/           L3 端到端 + REPORT.md + fetch-samples.sh
@@ -95,7 +95,9 @@ tests/e2e/           L3 端到端 + REPORT.md + fetch-samples.sh
 
 - 外壳**零 UI、零逻辑**：只做「解账户（登录页回调）→ 起 loopback 服务 → 把系统 webview 指向它」；目录树/播放页/空闲锁定全部复用 `internal/play` 的既有页面。引导页 `desktop/frontend/dist/index.html` 由 `assetserver.Options.Middleware` 把 `__BOOT__` 换成 JSON（url 或 error），出错时窗口里显示中文原因而不是白屏。
 - **锁定语义靠 `SoftLock`**：外壳传 `true`（锁定回登录页、端口存活、可再次解锁）；CLI 不传（零值 = 锁定时关停，行为与改动前一致）。改 `internal/play` 门控后**必须同时验证两条语义**（CLI 回归 + 外壳链路）。
-- 登录流程：`GET /login`（表单）→ `POST /login` → 会话 cookie `sv_session`；会话启用时内容路由校验该 cookie，锁定态访问媒体路径 403（不 panic）。
+- 登录流程：`GET /login`（表单）→ `POST /login`（`account` + `password`）→ 会话 cookie `sv_session`；会话启用时内容路由校验该 cookie，锁定态访问媒体路径 403（不 panic）。
+- **多账户（US8）**：登录页有原生 `<select>`；账户列表由外壳发现后**注入**引擎（`Options.Accounts`/`LibraryOptions.Accounts`），引擎自身不遍历文件系统。`Unlock` 回调签名是 `func(accountID, password string)`；列表非空时 `account` 必须在列表内，否则在**调用回调之前**拒绝（AC8.4）。`internal/play` 的账户列表模块是 `accounts.go`，发现逻辑在 `internal/desktopcfg/accounts.go`，只读 keystore 公开地址在 `internal/account/address.go`。
+- **页面不放说明性文案（AC8.6）**：登录页/索引页/播放页只留功能性信息（库根、数量、文件名与大小、错误原因）。红线说明留在 CLI 输出与文档里，别往页面上加「明文不落盘」「绝不导入…」这类段落——`page_style_test.go` 会判红。
 - **库根在页面里可换**（US7）：索引页 → `/library` 目录选择页（逐级浏览 + 每目录直含密档数）→ `POST /library` → `SetRoot` 规范路径、重扫、原子替换 root/tree/byID/order（`id` 重新分配）→ 回调 `LibraryOptions.OnLibraryChange`（外壳写 `desktop.json` 并保留 account 字段；CLI 不传该回调，选择只对本次会话有效）。非法路径**不改动任何状态**、在页面内显示中文原因；`~` 会展开、相对路径规范为绝对路径。锁定态一律回登录页（不枚举本机目录）。
 - 分发：`make desktop` → `make dist`（`.app` + CLI 打成 zip）→ `make release`（`gh`）。首版仅 macOS/arm64、不签名不公证；arm64 上 Go 自动 ad-hoc 签名，用户只需 `xattr -dr com.apple.quarantine`。
 - **明文红线在 webview 缓存上已验证**：WKWebView 用持久化数据仓库（`~/Library/Caches/<bundle-id>/WebKit`、`~/Library/WebKit/<bundle-id>`），但它尊重 `Cache-Control: no-store`——对照实验（可缓存对照有残留、引擎 `no-store` 响应与真实 mp4 流零残留）见 `tests/e2e/REPORT.md` 的 002 段。**改播放页/媒体响应头时不得去掉 `no-store`。**

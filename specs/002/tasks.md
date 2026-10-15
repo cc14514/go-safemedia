@@ -89,6 +89,29 @@
 - [x] T7.14 文档：`README.md` / `docs/manual.md` 改为「在页面里选库」（不再要求编辑 JSON）、`dist` 的 `说明.txt`、`AGENTS.md` 结构/易错点。
 - [x] T7.15 `page_style_test.go`：页面外观守护 —— 四个页面均无裸 `<a>`（必带 class）与 `text-decoration:underline`；索引页主按钮为 `<a class="btn primary">`；按钮含 hover / 按下 / `focus-visible` 三态与 `user-select:none`；目录行整行可点；播放页侧栏换目录入口为按钮（AC7.9）；`page.go` 的 `baseCSS` 三态样式同步实现。
 
+## M8 · 登录页账户选择 + 文案精简（US8，用户 2026-10-15 指示新增）
+
+> 用户指示：「登录页面，需要能够选择账户，如果有多个账户，需要选对了，才能完成登录。」+「把所有的废话说明都去掉」。
+
+### 测试（先写）
+
+- [x] T8.1 `internal/account/keystore_test.go`：`ReadKeystoreAddress`（正常读到 40 hex 地址 / 文件不存在 / 非 keystore JSON / 无 `address` 字段 → 返回错误且不 panic）；`ShortAddress(addr)` 形如 `0x1a2b…9f8e`（AC8.1）。
+- [x] T8.2 `internal/desktopcfg/accounts_test.go`：`ListAccounts` 发现规则（顶层 `*.json` + `accounts/*.json` + `cfg.Account` 指定路径）、按绝对路径去重、**非 keystore JSON 排除**（放入 `desktop.json` 与随机 JSON）、配置指定账户置首、名称=文件名、地址短形式（AC8.1）。
+- [x] T8.3 `internal/play/accounts_test.go`：登录页渲染账户列表（首项默认选中、显示地址短形式）；**伪造 `account` 标识 → 提示「请选择一个可用账户」且解锁回调未被调用**（回调调用计数断言，AC8.4）；选错账户 → 提示「口令错误或与所选账户不匹配」且无会话 cookie、重绘后保持选中（AC8.3）；空列表 → 不渲染选择器、`accountID` 为空串透传（AC8.5）；回调收到的 accountID 与提交值一致。已做变异验证：把 `core.handleLogin` 的账户标识校验短路掉后 `TestLoginRejectsAccountOutsideListBeforeUnlock` 变红。
+- [x] T8.4 `internal/play/page_style_test.go`（扩充）：四个页面均不含说明性段落（`绝不导入`、`明文不落盘`、`元数据`、`环回`）与 `hint`/`redline` 容器（AC8.6）。
+- [x] T8.5 `tests/integration/desktop_flow_test.go`（扩充）：两账户全链路 —— 登录页列出两项 → 伪造标识被拒（回调 0 次调用）→ 选 B 用 A 的口令 → 拒绝且无会话 cookie、重绘保持选中 → 选 B 用 B 的口令 → 303 + 会话（AC8.2–8.4）；「一个账户都没有 → 提示 `account create`」落在 `desktop/main_test.go` 的 `TestDesktopLoginWithoutAnyAccount`（AC8.5）。
+- [x] T8.6 先确认 T8.1–T8.5 全部失败（RED），再写实现。
+- [x] T8.13 `tests/integration/multiaccount_flow_test.go`（L2）：文档化流程的可执行化 —— `--account <数据目录>/accounts/工作.json account create` 能自动创建 `accounts/` 子目录，且 `desktopcfg.ListAccounts` 同时列出两个账户（名称=文件名、地址不同）、配置指定的账户置首（AC8.1/AC8.5）。已做变异验证：把 `SaveKeystore` 的父目录创建改成创建「父目录的父目录」后该用例变红。
+
+### 实现
+
+- [x] T8.7 `internal/account/address.go`（原计划放 keystore.go）：`ReadKeystoreAddress(path) (string, error)`（只读 JSON、不派生密钥、不做 KDF）+ `ShortAddress(addr) string`。
+- [x] T8.8 `internal/desktopcfg/accounts.go`：`ListAccounts(home string, cfg Config) ([]Account, error)`（`Account{Path, Name, Address}`，排序把 `cfg.Account` 置首）。
+- [x] T8.9 `internal/play`：新增 `AccountOption{ID,Label,Note}`；`Options.Accounts` / `LibraryOptions.Accounts` 用值切片；`Unlock` 签名改为 `func(accountID, password string)`（`Options` 为 `func(string,string) (string,*vault.Reader,error)`）；`core` 存列表 + 提交的选中项（`accountSel`，供重绘保持）；`handleLogin` 在调用回调**之前**校验标识；`loginPage` 渲染 `<select name="account">`（原生控件）与失败原因。
+- [x] T8.10 接线：`desktop/main.go`（`desktopcfg.ListAccounts` → 注入 → 解锁闭包按 ID 加载 keystore、把 `account.ErrWrongPassword` 包装为中文文案、对外壳发现集合做二次校验）；`internal/cli/play.go` 与全部 `Unlock:` 调用点（`internal/play/gate_test.go`、`picker_test.go`、`tests/integration/*`）改用新签名。
+- [x] T8.11 文案精简（AC8.6）：登录页删 `hint`/`redline` 段落；索引页删「条目只显示密档文件名…」与脚注；播放页删环回说明句（目录树操作提示保留）。
+- [x] T8.12 文档：`README.md` / `docs/manual.md`（多账户登录、`accounts/` 归置）、`CONTEXT.md`（新增「账户选择」术语）、`AGENTS.md`（登录页与会话、账户发现、文案红线）、`tests/e2e/REPORT.md`（US8 行）。
+
 ## 收尾
 
 - [x] T6.1 `make test`（L1+L2）全绿（含 `-race`）。

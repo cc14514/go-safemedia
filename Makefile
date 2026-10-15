@@ -85,7 +85,8 @@ dist: desktop
 	  '首次使用：' \
 	  '  1) 终端执行：./safemedia account create      # 新建账户，抄写助记词' \
 	  '  2) 封存视频：./safemedia seal ~/Movies/a.mp4 -o ~/.safemedia/library/a.svid' \
-	  '  3) 双击 safemedia.app，输入口令解锁后点选播放；换目录用索引页的「选择密档库」' \
+	  '  3) 双击 safemedia.app，在登录页的账户下拉框里选对账户并输入口令，解锁后点选播放' \
+	  '     （多个账户放在 ~/.safemedia/accounts/ 下会被自动列出；换扫描目录用索引页的「选择密档库」）' \
 	  '' \
 	  '若双击提示「无法打开，因为它来自身份不明的开发者」：' \
 	  '  这是未签名分发的正常现象（本版本不做签名公证）。在终端执行一次：' \

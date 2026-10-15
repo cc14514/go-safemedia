@@ -104,9 +104,12 @@ func sortNode(n *treeNode) {
 type LibraryOptions struct {
 	// Priv 是预解锁路径（CLI 与测试）：提供后服务以解锁态启动，不需要登录页。
 	Priv *ecdsa.PrivateKey
-	// Unlock 是延迟解锁路径（桌面外壳）：服务以锁定态启动，登录页提交口令后
-	// 调用本回调取得私钥。与 Priv 二选一；回调实现方须在使用后清零口令字节。
-	Unlock func(password string) (*ecdsa.PrivateKey, error)
+	// Unlock 是延迟解锁路径（桌面外壳）：服务以锁定态启动，登录页提交
+	// 「账户 + 口令」后调用本回调取得私钥。与 Priv 二选一；回调实现方须在使用后清零口令字节。
+	Unlock func(accountID, password string) (*ecdsa.PrivateKey, error)
+
+	// Accounts 是登录页可选的账户（空 = 不渲染选择器，只输入口令）。
+	Accounts []AccountOption
 
 	Entries     []Entry
 	Target      string // 登录页展示的目标描述（通常为库根路径）
@@ -242,6 +245,7 @@ func NewLibrary(opts LibraryOptions) (*Library, error) {
 		softLock:    opts.SoftLock,
 		mediaPrefix: "/media/" + token + "/",
 		target:      opts.Target,
+		accounts:    opts.Accounts,
 		unlockFn:    l.doUnlock,
 		session:     session,
 		preUnlocked: opts.Priv != nil,
@@ -342,11 +346,11 @@ func normalizeDir(dir string) (string, error) {
 }
 
 // doUnlock 是门控的解锁回调：调用 Options.Unlock 并接管新私钥。
-func (l *Library) doUnlock(password string) error {
+func (l *Library) doUnlock(accountID, password string) error {
 	if l.opts.Unlock == nil {
 		return errors.New("该服务未配置解锁方式")
 	}
-	priv, err := l.opts.Unlock(password)
+	priv, err := l.opts.Unlock(accountID, password)
 	if err != nil {
 		return err
 	}

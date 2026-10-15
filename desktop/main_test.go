@@ -2,13 +2,16 @@ package main
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/cc14514/go-safemedia/internal/account"
 	"github.com/cc14514/go-safemedia/internal/desktopcfg"
 )
 
@@ -183,4 +186,160 @@ func TestEmptyLibraryDirIsAccepted(t *testing.T) {
 	if !strings.Contains(string(out), "缺少播放服务地址") {
 		t.Fatal("无 url/error 时引导页未给出明确提示")
 	}
+}
+
+// T8.5/T8.7（AC8.2–AC8.5、AC8.7）：外壳侧的账户接线 ——
+// 发现本机账户 → 作为选项注入登录页 → 引擎只认列表内的标识 → 口令错误给出中文原因。
+func TestDesktopAccountWiring(t *testing.T) {
+	home := t.TempDir()
+	dataDir := desktopcfg.DefaultDir(home)
+	if err := os.MkdirAll(filepath.Join(dataDir, "accounts"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	const pwMain, pwWork = "desktop main passphrase", "desktop work passphrase"
+	mainKs := filepath.Join(dataDir, "keystore.json")
+	workKs := filepath.Join(dataDir, "accounts", "work.json")
+	writeTestKeystore(t, mainKs, pwMain)
+	writeTestKeystore(t, workKs, pwWork)
+	// 列表之外的账户（未被发现）：即便口令正确也不得通过登录页解锁。
+	outside := filepath.Join(t.TempDir(), "outside.json")
+	writeTestKeystore(t, outside, "outside passphrase")
+
+	libDir := filepath.Join(t.TempDir(), "lib")
+	if err := os.MkdirAll(libDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	eng, _, err := buildEngine(desktopcfg.Target{
+		Kind: desktopcfg.KindLibrary, Path: libDir, Account: mainKs,
+	}, home, desktopcfg.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+	base, err := eng.Start()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// ① 登录页把两个账户都列出来（名称），并只认列表内的标识
+	page := desktopGet(t, base)
+	for _, want := range []string{
+		`<select id="account" name="account">`,
+		`value="` + mainKs + `"`, "keystore.json",
+		`value="` + workKs + `"`, "work.json",
+	} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("登录页缺少 %q:\n%s", want, page)
+		}
+	}
+	if strings.Contains(page, filepath.Base(outside)) {
+		t.Fatalf("列表外的账户出现在登录页:\n%s", page)
+	}
+
+	// ② 列表外的账户：引擎在触达解锁回调之前就拒绝（AC8.7 第一道防线）。
+	body, code := desktopPost(t, base+"login", url.Values{
+		"account": {outside}, "password": {"outside passphrase"},
+	})
+	if code == http.StatusSeeOther {
+		t.Fatalf("列表外账户不该解锁（code=%d）", code)
+	}
+	if !strings.Contains(body, "请选择一个可用账户") {
+		t.Fatalf("列表外账户未给出拒绝提示（也不该是「找不到账户文件」）:\n%s", body)
+	}
+
+	// ③ 列表内但口令错：给出外壳的中文原因，且不下发会话（AC8.3）
+	body, code = desktopPost(t, base+"login", url.Values{
+		"account": {mainKs}, "password": {"wrong passphrase"},
+	})
+	if code == http.StatusSeeOther {
+		t.Fatalf("错口令不该解锁（code=%d）", code)
+	}
+	if !strings.Contains(body, "口令错误或与所选账户不匹配") {
+		t.Fatalf("错口令未给出中文原因:\n%s", body)
+	}
+
+	// ④ 选对账户 + 对口令 → 303 进入内容区（AC8.2）
+	if _, code = desktopPost(t, base+"login", url.Values{
+		"account": {workKs}, "password": {pwWork},
+	}); code != http.StatusSeeOther {
+		t.Fatalf("选对账户应 303，实际 code=%d", code)
+	}
+}
+
+// T8.5（AC8.5）：一个账户都没有时不渲染选择器（只留口令框），并提示先用 CLI 新建账户。
+func TestDesktopLoginWithoutAnyAccount(t *testing.T) {
+	home := t.TempDir()
+	libDir := filepath.Join(t.TempDir(), "lib")
+	if err := os.MkdirAll(libDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	missing := filepath.Join(home, ".safemedia", "keystore.json")
+
+	eng, _, err := buildEngine(desktopcfg.Target{
+		Kind: desktopcfg.KindLibrary, Path: libDir, Account: missing,
+	}, home, desktopcfg.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+	base, err := eng.Start()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	page := desktopGet(t, base)
+	if strings.Contains(page, `<select id="account"`) {
+		t.Fatalf("无账户却渲染了账户选择器:\n%s", page)
+	}
+	body, code := desktopPost(t, base+"login", url.Values{"password": {"whatever passphrase"}})
+	if code == http.StatusSeeOther {
+		t.Fatalf("无账户不该解锁成功（code=%d）", code)
+	}
+	if !strings.Contains(body, "safemedia account create") {
+		t.Fatalf("未提示先用 CLI 新建账户:\n%s", body)
+	}
+}
+
+// writeTestKeystore 造一个低成本 scrypt 的测试账户。
+func writeTestKeystore(t *testing.T, path, password string) {
+	t.Helper()
+	acct, err := account.Generate(12)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := account.SaveKeystore(path, acct, password, 1<<10); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func desktopGet(t *testing.T, u string) string {
+	t.Helper()
+	resp, err := http.Get(u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+// desktopPost 提交表单且不跟随重定向（要断言 303 本身）。
+func desktopPost(t *testing.T, u string, form url.Values) (string, int) {
+	t.Helper()
+	c := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+	resp, err := c.PostForm(u, form)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b), resp.StatusCode
 }

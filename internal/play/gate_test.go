@@ -44,7 +44,7 @@ func newLockedServer(t *testing.T, softLock bool) (*play.Server, *int) {
 		Name:        "clip.mp4.svid",
 		IdleTimeout: time.Minute,
 		SoftLock:    softLock,
-		Unlock: func(pw string) (string, *vault.Reader, error) {
+		Unlock: func(_, pw string) (string, *vault.Reader, error) {
 			calls++
 			if pw != testPassword {
 				return "", nil, errors.New("口令错误：无法解锁账户")
@@ -275,7 +275,7 @@ func TestLoginPageEscapesTarget(t *testing.T) {
 
 	s, err := play.New(play.Options{
 		Name: evil,
-		Unlock: func(string) (string, *vault.Reader, error) {
+		Unlock: func(string, string) (string, *vault.Reader, error) {
 			r, err := vault.Open(dst, priv)
 			if err != nil {
 				return "", nil, err
@@ -431,7 +431,7 @@ func TestLibraryLockedGateUnlockAndSoftLock(t *testing.T) {
 		Target:      dir,
 		IdleTimeout: time.Minute,
 		SoftLock:    true,
-		Unlock: func(pw string) (*ecdsa.PrivateKey, error) {
+		Unlock: func(_, pw string) (*ecdsa.PrivateKey, error) {
 			if pw != testPassword {
 				return nil, errors.New("口令错误：无法解锁账户")
 			}

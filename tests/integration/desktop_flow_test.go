@@ -2,6 +2,7 @@ package integration
 
 import (
 	"crypto/ecdsa"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
@@ -52,7 +53,7 @@ func TestDesktopFlowLockedToUnlocked(t *testing.T) {
 		Target:      libDir,
 		SoftLock:    true, // 外壳模式：锁定回登录页，不关停
 		IdleTimeout: play.DefaultIdleTimeout,
-		Unlock: func(password string) (*ecdsa.PrivateKey, error) {
+		Unlock: func(_, password string) (*ecdsa.PrivateKey, error) {
 			unlockAttempts++
 			acct, err := account.LoadKeystoreWithPassphrase(keystore, []byte(password))
 			if err != nil {
@@ -176,6 +177,154 @@ func TestDesktopFlowLockedToUnlocked(t *testing.T) {
 		if resp.StatusCode != http.StatusGone {
 			t.Fatalf("关闭后仍能取得内容：code=%d", resp.StatusCode)
 		}
+	}
+}
+
+// T8.5（AC8.2–AC8.4）：多账户登录 —— 选对账户才能解锁。
+//
+// 引擎侧账户标识是不透明的（外壳传 keystore 绝对路径，见 desktop/main.go 的接线）；
+// 本用例用两个假标识验证契约本身：列表渲染、伪造标识在解锁回调之前被拒、
+// 选错账户不下发会话且重绘后保持选中、选对则 303 + 会话 cookie。
+func TestDesktopAccountSelection(t *testing.T) {
+	const (
+		pwA = "account a passphrase"
+		pwB = "account b passphrase"
+		idA = "/tmp/keystore-a.json"
+		idB = "/tmp/keystore-b.json"
+	)
+	acctA, err := account.Generate(12)
+	if err != nil {
+		t.Fatal(err)
+	}
+	acctB, err := account.Generate(12)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	libDir := t.TempDir()
+	entries, err := play.ScanLibrary(libDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	unlockCalls := 0
+	lib, err := play.NewLibrary(play.LibraryOptions{
+		Entries:     entries,
+		Target:      libDir,
+		SoftLock:    true,
+		IdleTimeout: play.DefaultIdleTimeout,
+		Accounts: []play.AccountOption{
+			{ID: idA, Label: "keystore-a.json", Note: account.ShortAddress(acctA.Address())},
+			{ID: idB, Label: "keystore-b.json", Note: account.ShortAddress(acctB.Address())},
+		},
+		Unlock: func(accountID, password string) (*ecdsa.PrivateKey, error) {
+			unlockCalls++
+			switch accountID {
+			case idA:
+				if password == pwA {
+					return acctA.PrivateKey(), nil
+				}
+			case idB:
+				if password == pwB {
+					return acctB.PrivateKey(), nil
+				}
+			}
+			return nil, errors.New("口令错误或与所选账户不匹配")
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lib.Close()
+
+	base, err := lib.Start()
+	if err != nil {
+		t.Fatal(err)
+	}
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &http.Client{Jar: jar}
+	noredir := &http.Client{Jar: jar, CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+	baseURL, err := url.Parse(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hasSession := func() bool {
+		for _, ck := range jar.Cookies(baseURL) {
+			if ck.Name == "sv_session" && ck.Value != "" {
+				return true
+			}
+		}
+		return false
+	}
+
+	// ① 登录页列出两个账户（名称 + 地址短形式），首项默认选中
+	login := get(t, client, base)
+	for _, want := range []string{
+		`<select id="account" name="account">`,
+		">keystore-a.json — " + account.ShortAddress(acctA.Address()) + "<",
+		">keystore-b.json — " + account.ShortAddress(acctB.Address()) + "<",
+		`value="` + idA + `" selected`,
+	} {
+		if !strings.Contains(login.body, want) {
+			t.Fatalf("登录页缺少 %q:\n%s", want, login.body)
+		}
+	}
+
+	// ② 伪造/篡改的账户标识：拒绝，且解锁回调一次都不该被调用（AC8.4）
+	forged := postForm(t, noredir, base+"login", url.Values{
+		"account":  {"/etc/passwd"},
+		"password": {pwA},
+	})
+	if forged.code == http.StatusSeeOther || forged.code == http.StatusFound {
+		t.Fatalf("伪造账户标识不该重定向: %d", forged.code)
+	}
+	if !strings.Contains(forged.body, "请选择一个可用账户") {
+		t.Fatalf("伪造账户标识未给出提示:\n%s", forged.body)
+	}
+	if unlockCalls != 0 {
+		t.Fatalf("伪造标识触达了解锁回调（调用 %d 次）", unlockCalls)
+	}
+	if hasSession() {
+		t.Fatal("伪造账户标识却下发了会话 cookie")
+	}
+
+	// ③ 选错账户（用 A 的口令解 B）：停在登录页、无会话、重绘后仍选中 B（AC8.3）
+	wrongSel := postForm(t, noredir, base+"login", url.Values{
+		"account":  {idB},
+		"password": {pwA},
+	})
+	if wrongSel.code == http.StatusSeeOther || wrongSel.code == http.StatusFound {
+		t.Fatalf("选错账户不该重定向: %d", wrongSel.code)
+	}
+	if !strings.Contains(wrongSel.body, "口令错误或与所选账户不匹配") {
+		t.Fatalf("选错账户未给出提示:\n%s", wrongSel.body)
+	}
+	if !strings.Contains(wrongSel.body, `value="`+idB+`" selected`) {
+		t.Fatalf("重绘后未保持上次选中的账户:\n%s", wrongSel.body)
+	}
+	if hasSession() {
+		t.Fatal("选错账户却下发了会话 cookie")
+	}
+	if unlockCalls != 1 {
+		t.Fatalf("选错账户应恰好触达回调 1 次，实际 %d 次", unlockCalls)
+	}
+
+	// ④ 选对账户：303 + 会话 cookie，之后能进入内容区（AC8.2）
+	okLogin := postForm(t, noredir, base+"login", url.Values{"account": {idB}, "password": {pwB}})
+	if okLogin.code != http.StatusSeeOther {
+		t.Fatalf("选对账户应 303，实际 code=%d\n%s", okLogin.code, okLogin.body)
+	}
+	if !hasSession() {
+		t.Fatal("选对账户未下发会话 cookie")
+	}
+	idx := get(t, client, base)
+	if idx.code != http.StatusOK || strings.Contains(idx.body, `action="/login"`) {
+		t.Fatalf("解锁后仍停在登录页：code=%d\n%s", idx.code, idx.body)
 	}
 }
 

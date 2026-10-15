@@ -60,7 +60,7 @@ func TestPickerFlowAcrossLibrarySwitch(t *testing.T) {
 		Target:      libA,
 		SoftLock:    true, // 外壳模式：锁定回登录页，不关停
 		IdleTimeout: play.DefaultIdleTimeout,
-		Unlock: func(password string) (*ecdsa.PrivateKey, error) {
+		Unlock: func(_, password string) (*ecdsa.PrivateKey, error) {
 			acct, err := account.LoadKeystoreWithPassphrase(keystore, []byte(password))
 			if err != nil {
 				return nil, err
