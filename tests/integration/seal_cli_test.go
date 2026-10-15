@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/cc14514/go-safemedia/internal/account"
@@ -19,6 +20,13 @@ func fakeMP4(n int) []byte {
 	copy(b[0:4], []byte{0x00, 0x00, 0x00, 0x20})
 	copy(b[4:8], "ftyp")
 	copy(b[8:12], "isom")
+	return b
+}
+
+// fakeMOV 生成 brand 为 `qt  ` 的最小 mov 数据。
+func fakeMOV(n int) []byte {
+	b := fakeMP4(n)
+	copy(b[8:12], "qt  ")
 	return b
 }
 
@@ -151,20 +159,26 @@ func TestM2SealDirBatchAndForce(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// 非白名单文件也应出现在 --dir 列表里并被拒绝（不影响其他文件）
+	// 非白名单文件在目录遍历时被跳过，不影响同目录的视频
 	if err := os.WriteFile(filepath.Join(in, "c.txt"), []byte("nope"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	s := &script{secrets: []string{pw}}
-	out, err := runCLI(t, s, "--account", keystore, "seal", "--dir", in)
-	if err == nil {
-		t.Fatalf("目录中含非法文件时应当返回失败:\n%s", out)
+	out, err := runCLI(t, s, "--account", keystore, "seal", in)
+	if err != nil {
+		t.Fatalf("目录封存失败: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "跳过 1 个非视频文件") {
+		t.Fatalf("未报告跳过的非视频文件:\n%s", out)
 	}
 	for _, name := range []string{"a", "b"} {
 		if !fileExists(filepath.Join(in, name+".mp4.svid")) {
 			t.Fatalf("%s 未被封存:\n%s", name, out)
 		}
+	}
+	if fileExists(filepath.Join(in, "c.txt.svid")) {
+		t.Fatalf("非视频文件不该被封存:\n%s", out)
 	}
 
 	// 已存在且未加 --force：拒绝
@@ -179,5 +193,67 @@ func TestM2SealDirBatchAndForce(t *testing.T) {
 	out3, err := runCLI(t, s3, "--account", keystore, "seal", filepath.Join(in, "a.mp4"), "--force")
 	if err != nil {
 		t.Fatalf("--force 覆盖失败: %v\n%s", err, out3)
+	}
+}
+
+// AC3.8：目录输入 + 目录输出，相对子路径在输出目录中重建。
+func TestM2SealDirMirrorsTreeToOutDir(t *testing.T) {
+	dir := t.TempDir()
+	const pw = "seal passphrase"
+	keystore := newAccountForTest(t, dir, pw)
+
+	in := filepath.Join(dir, "in")
+	for _, sub := range []string{"", "sub", ".hidden"} {
+		if err := os.MkdirAll(filepath.Join(in, sub), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write := func(rel string, data []byte) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(in, rel), data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("top.mp4", fakeMP4(1200))
+	write("sub/nested.mov", fakeMOV(1200))
+	write(".hidden/skip.mp4", fakeMP4(1200))
+	write("notes.txt", []byte("not a video"))
+
+	outDir := filepath.Join(dir, "vaults")
+	s := &script{secrets: []string{pw}}
+	out, err := runCLI(t, s, "--account", keystore, "seal", in, "-o", outDir)
+	if err != nil {
+		t.Fatalf("目录 → 目录封存失败: %v\n%s", err, out)
+	}
+
+	for _, rel := range []string{"top.mp4.svid", filepath.Join("sub", "nested.mov.svid")} {
+		if !fileExists(filepath.Join(outDir, rel)) {
+			t.Fatalf("输出目录缺少 %s:\n%s", rel, out)
+		}
+	}
+	// 隐藏项与非视频不封存
+	if fileExists(filepath.Join(outDir, ".hidden", "skip.mp4.svid")) {
+		t.Fatalf("隐藏目录中的文件不该被封存:\n%s", out)
+	}
+	if fileExists(filepath.Join(outDir, "notes.txt.svid")) {
+		t.Fatalf("非视频文件不该被封存:\n%s", out)
+	}
+	// 指定了输出目录时，源目录里不留密档
+	if fileExists(filepath.Join(in, "top.mp4.svid")) {
+		t.Fatalf("指定 -o 后不该再把密档写到源目录:\n%s", out)
+	}
+
+	// 封存结果确实可用该账户启封
+	acct, err := account.LoadKeystoreWithPassphrase(keystore, []byte(pw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := vault.Open(filepath.Join(outDir, "sub", "nested.mov.svid"), acct.PrivateKey())
+	if err != nil {
+		t.Fatalf("启封镜像路径下的密档失败: %v", err)
+	}
+	defer r.Close()
+	if r.Size() != 1200 {
+		t.Fatalf("启封大小不符: %d", r.Size())
 	}
 }

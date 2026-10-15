@@ -53,6 +53,55 @@ func TestDetectContainerWhitelist(t *testing.T) {
 	}
 }
 
+// TestDetectFileContainer 覆盖目录遍历的筛选口径：从磁盘头部识别容器。
+func TestDetectFileContainer(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name string, b []byte) string {
+		t.Helper()
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, b, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+
+	for _, tc := range []struct {
+		name     string
+		data     []byte
+		wantHint byte
+	}{
+		{"a.mp4", fakeContainer("mp4", 600), vault.ContainerMP4},
+		{"a.mov", fakeContainer("mov", 600), vault.ContainerMOV},
+		{"a.webm", fakeContainer("webm", 600), vault.ContainerWebM},
+		{"tiny.mp4", fakeContainer("mp4", 16), vault.ContainerMP4},
+	} {
+		hint, _, err := vault.DetectFileContainer(write(tc.name, tc.data))
+		if err != nil {
+			t.Fatalf("%s: 应当识别成功，却报错 %v", tc.name, err)
+		}
+		if hint != tc.wantHint {
+			t.Fatalf("%s: hint=%d 期望 %d", tc.name, hint, tc.wantHint)
+		}
+	}
+
+	for _, tc := range []struct {
+		name string
+		data []byte
+	}{
+		{"notes.txt", []byte("hello world")},
+		{"empty.mp4", nil},
+		{"mkv-like", append([]byte{0x1A, 0x45, 0xDF, 0xA3}, []byte(".......matroska")...)},
+	} {
+		if _, _, err := vault.DetectFileContainer(write(tc.name, tc.data)); err == nil {
+			t.Fatalf("%s 不该被识别为视频", tc.name)
+		}
+	}
+
+	if _, _, err := vault.DetectFileContainer(filepath.Join(dir, "nope.mp4")); err == nil {
+		t.Fatal("不存在的文件应当报错")
+	}
+}
+
 // TestContentTypeSniffing 覆盖 T3.1：ftyp→video/mp4、qt→video/quicktime、EBML→video/webm。
 func TestContentTypeSniffing(t *testing.T) {
 	cases := []struct {

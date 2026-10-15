@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
+	"os"
 )
 
 // ErrUnsupportedContainer 表示文件不是白名单容器（mp4 / mov / webm）。
@@ -35,6 +37,22 @@ func DetectContainer(head []byte) (hint byte, name string, err error) {
 		return 0, "", fmt.Errorf("%w: 未知 EBML 文档类型", ErrUnsupportedContainer)
 	}
 	return 0, "", ErrUnsupportedContainer
+}
+
+// DetectFileContainer 读取文件头部并判断容器类型（目录遍历时用它筛出视频）。
+func DetectFileContainer(path string) (hint byte, name string, err error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, "", err
+	}
+	defer f.Close()
+
+	head := make([]byte, sniffLen)
+	n, err := io.ReadFull(f, head)
+	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+		return 0, "", err
+	}
+	return DetectContainer(head[:n])
 }
 
 // ContainerContentType 返回容器对应的 MIME 类型（播放服务的 fallback）。

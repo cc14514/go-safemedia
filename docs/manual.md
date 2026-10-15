@@ -228,33 +228,55 @@ safemedia account recover --from-mnemonic
 ### 5.4 `seal` — 封存视频
 
 ```sh
-safemedia seal <video>... [-o <out.svid>]
-safemedia seal --dir <目录> [--out-dir <输出目录>]
+safemedia seal <视频文件|目录>... [-o <输出>] [--force]
 ```
+
+输入可以是**视频文件**，也可以是一个**目录**——目录会被**递归遍历**，其中的视频逐个封存。可以一次给多个输入。
 
 | flag | 说明 |
 |---|---|
-| `-o, --out` | 输出密档路径，**仅用于单个输入** |
-| `--dir` | 批量封存该目录下所有 `mp4/mov/webm`（跳过隐藏文件与已有 `.svid`） |
-| `--out-dir` | 批量输出目录，默认与源文件同目录 |
+| `-o, --out` | 输出位置。单个视频 → 密档文件路径；目录输入（或多个输入）→ **输出目录**，源目录的相对子路径在其中重建 |
 | `--force` | 覆盖已存在的密档（默认遇到已存在则跳过并报错） |
+
+**输出规则**：
+
+| 输入 | 输出 |
+|---|---|
+| `clip.mp4` | `clip.mp4.svid`（写在源文件旁边） |
+| 目录 `Movies/` | 每个 `a.mp4` → `a.mp4.svid`，就地写在它旁边 |
+| 目录 `Movies/` + `-o Vaults` | `Movies/a.mp4` → `Vaults/a.mp4.svid`；`Movies/2024/b.mov` → `Vaults/2024/b.mov.svid` |
+| 多个文件 + `-o Vaults` | 每个都放到 `Vaults/`（此时 `-o` 一律当输出目录） |
+
+目录遍历时会**自动跳过**：隐藏文件与隐藏目录（`.` 开头）、符号链接、已有的 `.svid`、非白名单文件（按文件头部嗅探），以及输出目录自身。跳过数量在开头报告；输出目录不存在会自动创建。
 
 要点：
 
 - **不转码**：密档 = 原文件 + 极小的认证开销（156 B 头部 + 每 4 MiB 块 28 B）。实测 256 KiB 的文件约 **+0.07%**，文件越大比例越趋近于 0。
 - **白名单容器**：`mp4`（ISO BMFF，`ftyp`）、`mov`（`ftyp` 且 brand 为 `qt  `）、`webm`（EBML DocType `webm`）。**`mkv`/`avi`/`flv` 会被拒绝**——浏览器无法原生播放它们。
+- **显式传入的文件**若不在白名单内，会**直接报错**（退出码 1）；目录遍历时则静默跳过并计数。
+- 一个视频都没找到时直接报错退出（退出码 1），不会「静默成功」。
 - 封存需要解锁账户（要读出公钥），因此会先问登录口令。
 - 明文只在内存中流过，**磁盘上不会出现明文副本**，也不产生临时文件。
 - 终端会显示百分比进度；重定向到文件时自动静默，避免污染脚本输出。
 - 中途 `Ctrl-C` 只会留下一个**不完整的 `.svid`（不含明文）**，删除后重跑即可（或加 `--force` 覆盖）。
 
 ```sh
-# 单个
+# 单个视频
 safemedia seal ~/Movies/clip.mp4 -o ~/Vaults/clip.mp4.svid
 # ✓ clip.mp4.svid 容器=mp4 明文=255.3 KiB 块数=1  +0.1%
 
-# 批量：把整个目录封存到另一个目录
-safemedia seal --dir ~/Movies --out-dir ~/Vaults
+# 目录 → 目录：递归，保持子目录结构
+safemedia seal ~/Movies -o ~/Vaults
+# 跳过 1 个非视频文件
+# 输入登录口令:
+# 使用账户 0x… 的公钥封存 3 个文件
+# 封存 /Users/me/Movies/a.mp4
+#    → /Users/me/Vaults/a.mp4.svid
+# ✓ a.mp4.svid 容器=mp4 明文=8.8 KiB 块数=1  +2.0%
+# 封存 /Users/me/Movies/2024/iphone.mov
+#    → /Users/me/Vaults/2024/iphone.mov.svid
+# ✓ iphone.mov.svid 容器=mov 明文=8.8 KiB 块数=1  +2.0%
+# ✓ 共 3 个文件封存完成
 ```
 
 ### 5.5 `play` — 启封播放
@@ -318,9 +340,11 @@ safemedia play ~/Vaults/private.svid
 ### 6.2 批量封存整个相册
 
 ```sh
-safemedia seal --dir ~/Pictures/iPhone --out-dir ~/Vaults/iPhone
+safemedia seal ~/Pictures/iPhone -o ~/Vaults/iPhone
 safemedia play ~/Vaults/iPhone                 # 目录模式，浏览器点选播放
 ```
+
+相册里的**子目录结构会原样保留**（例如 iPhone 的 `2024/` 会在输出目录下重建），但隐藏文件、符号链接与非视频文件会被跳过。
 
 想覆盖上一轮的结果：加 `--force`。
 
@@ -462,8 +486,8 @@ safemedia play ~/Vaults/x.svid --no-browser   # 然后手动打开地址，查�
 | `⚠ 无法自动打开浏览器（…），请手动访问上面的地址` | 系统无默认浏览器/无 `xdg-open` | 复制打印出的 `http://127.0.0.1:…` 手动打开；服务会继续运行 |
 | 目录模式显示「没有 .svid 密档」 | 目录里确实没有密档 | 先 `seal`，或换目录 |
 | `✗ xxx.svid 已存在（用 --force 覆盖）` | 目标密档已在 | 加 `--force`，或改 `-o` |
-| `✗ -o 只适用于单个输入文件` | 多个输入配了 `-o` | 批量请用 `--dir` + `--out-dir` |
-| `✗ xxx 是目录（用 --dir 批量封存）` | 把目录当文件传了 | 改用 `--dir`，或 `play` 目录 |
+| `✗ 没有找到可封存的文件（支持的容器：mp4 / mov / webm）` | 输入目录里没有白名单视频（或有，但都是隐藏项） | 确认容器；`mkv`/`avi`/`flv` 需先无损转封装成 mp4 |
+| `跳过 N 个非视频文件` | 目录里混有非视频文件 | 正常提示，不是错误；如需一并封存请先转封装 |
 | `✗ mpv 模式请指定单个密档文件` | 目录 + `--player mpv` | mpv 模式只支持单文件 |
 | 封存中断，留下一个 `.svid` | `Ctrl-C` | 直接删除它（其中不含明文），或加 `--force` 重跑 |
 | 播放久了自动停了 | 空闲超过 `--idle`（默认 30m） | 重新运行 `play`；需要更久就调大 `--idle` |
@@ -501,7 +525,7 @@ safemedia play ~/Vaults/x.svid --no-browser   # 然后手动打开地址，查�
 | 码 | 含义 | 例子 |
 |---|---|---|
 | `0` | 成功 | 封存完成、播放正常结束、`version` |
-| `1` | 用户/输入错误 | 口令错、不是本账户的密档、容器不在白名单、文件不存在 |
+| `1` | 用户/输入错误 | 口令错、不是本账户的密档、容器不在白名单、文件不存在、目录里没有可封存的视频 |
 | `2` | 数据错误 | 不是密档/头部损坏、密档被篡改 |
 | `3` | 环境错误 | 用了 `--player mpv` 但本机没有 mpv |
 

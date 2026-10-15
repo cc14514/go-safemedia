@@ -133,7 +133,7 @@ func writeReport() error {
 	fmt.Fprintf(&b, "- [ ] **AC6.1** 本机安装 mpv 后 `safemedia play clip.svid --player mpv` 实播（本机未安装 mpv，仅验证到「传参 + 未安装报错」为止）\n")
 	fmt.Fprintf(&b, "- [ ] **AC7.1** 双机搬运实测：U 盘拷 keystore + .svid 到另一台机播放（L2/L3 用不同 HOME 模拟了可搬运性）\n")
 	fmt.Fprintf(&b, "- [ ] **AC8.3 深度检查** 播放结束后全盘扫描（本报告已自动核对：播放期间不新增文件、进程不打开明文视频）\n")
-	fmt.Fprintf(&b, "\n## 如何复现\n\n```sh\nmake test-l3\n# 有真实样本时（推荐；脚本会自动下载 4 个小样本）：\ntests/e2e/fetch-samples.sh /tmp/safemedia-samples\nSAFEMEDIA_E2E_SAMPLES=/tmp/safemedia-samples make test-l3\n```\n")
+	fmt.Fprintf(&b, "\n## 如何复现\n\n```sh\nmake test-l3\n# 有真实样本时（推荐；脚本会自动准备 mp4/webm/mov 三个小样本）：\ntests/e2e/fetch-samples.sh /tmp/safemedia-samples\nSAFEMEDIA_E2E_SAMPLES=/tmp/safemedia-samples make test-l3\n```\n")
 
 	return os.WriteFile("REPORT.md", []byte(b.String()), 0o644)
 }

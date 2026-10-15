@@ -33,8 +33,8 @@ make build
 safemedia account create
 
 # 2) 封存视频（不转码；mp4 / mov / webm）
-safemedia seal ~/Movies/clip.mp4 -o ~/vaults/clip.svid
-safemedia seal --dir ~/Movies --out-dir ~/vaults    # 批量封存目录下所有 mp4/mov/webm
+safemedia seal ~/Movies/clip.mp4 -o ~/vaults/clip.mp4.svid   # 单个视频
+safemedia seal ~/Movies -o ~/vaults                          # 整个目录（递归）→ 另一个目录
 
 # 3) 播放（起本地服务 + 自动开浏览器；Ctrl-C 或空闲 30 分钟自动锁定）
 safemedia play ~/vaults/clip.svid

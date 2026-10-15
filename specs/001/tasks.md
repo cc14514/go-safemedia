@@ -26,7 +26,7 @@
   - 错账户：用 B 账户私钥 ECIES 解 A 的密档 → 报「不属于本账户」；
   - 白名单：mp4/mov(ftyp)/webm(EBML) 通过，mkv/avi/未知 magic 拒绝。
 - [x] T2.2 (GREEN) `internal/vault`：`Format`（头部布局常量）、`Seal`（每文件随机 file key，ECIES 封装到账户公钥，4MiB 分块 AES-256-GCM，每块随机 nonce）、`Open`+`ReadAt`（隐式索引定位块）。
-- [x] T2.3 CLI：`safemedia seal <video> -o <vault>`（含 `seal --dir` 批量）；封存前 magic 白名单校验；进度输出。
+- [x] T2.3 CLI：`safemedia seal <视频文件|目录> -o <文件|目录>`（目录递归、相对子路径在输出目录重建、跳过隐藏/非视频/已有 .svid）；封存前 magic 白名单校验；进度输出。
 - [x] T2.4 门禁：L1 全绿 + `tests/integration` 封存往返用例（L2 起步）。
 
 ## M3 — 播放服务 + 单文件播放（US4、US8）
