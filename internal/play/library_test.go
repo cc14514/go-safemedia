@@ -237,3 +237,120 @@ func mustWrite(t *testing.T, path string, b []byte) {
 		t.Fatal(err)
 	}
 }
+
+// AC5.4：ScanLibrary 递归子目录，条目带相对路径 Rel；隐藏项与符号链接不跟随。
+func TestScanLibraryRecursesIntoSubdirs(t *testing.T) {
+	dir := t.TempDir()
+	priv := newKey(t)
+	plain := fakeMP4(1500)
+	for _, rel := range []string{"a.mp4.svid", "sub/b.mp4.svid", "sub/deep/c.mp4.svid", ".hidden/d.mp4.svid"} {
+		full := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		sealVault(t, filepath.Dir(full), filepath.Base(full), priv, plain)
+	}
+	mustWrite(t, filepath.Join(dir, "note.txt"), []byte("x"))
+
+	// 指向库外的符号链接不得被跟随（否则会列出库外密档）
+	outsideDir := t.TempDir()
+	outside := sealVault(t, outsideDir, "outside.mp4.svid", priv, plain)
+	if err := os.Symlink(outside, filepath.Join(dir, "link.mp4.svid")); err != nil {
+		t.Logf("符号链接不可用，跳过该项断言: %v", err)
+	}
+
+	entries, err := play.ScanLibrary(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rels []string
+	for _, e := range entries {
+		rels = append(rels, e.Rel)
+	}
+	want := []string{"a.mp4.svid", "sub/b.mp4.svid", "sub/deep/c.mp4.svid"}
+	if strings.Join(rels, "|") != strings.Join(want, "|") {
+		t.Fatalf("递归条目 = %v, 期望 %v", rels, want)
+	}
+	if entries[1].Name != "b.mp4.svid" {
+		t.Fatalf("Name 应为文件名本身，得到 %q", entries[1].Name)
+	}
+	if entries[1].Path != filepath.Join(dir, "sub", "b.mp4.svid") {
+		t.Fatalf("Path 应指向子目录中的真实文件，得到 %q", entries[1].Path)
+	}
+}
+
+// AC5.4 + AC5.5：索引页按目录树分组；播放页左侧常驻目录树，可切换片源。
+func TestLibraryTreeIndexAndSidebar(t *testing.T) {
+	dir := t.TempDir()
+	priv := newKey(t)
+	plainTop := fakeMP4(4000)
+	plainNested := fakeMP4(3000)
+	sealVault(t, dir, "top.mp4.svid", priv, plainTop)
+	sub := filepath.Join(dir, "2024")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sealVault(t, sub, "nested.mov.svid", priv, plainNested)
+
+	entries, err := play.ScanLibrary(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lib, err := play.NewLibrary(play.LibraryOptions{Priv: priv, Entries: entries, IdleTimeout: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lib.Close()
+	ts := httptest.NewServer(lib.Handler())
+	defer ts.Close()
+
+	index := httpGetString(t, ts.URL+"/")
+	for _, want := range []string{"2024", "nested.mov.svid", "top.mp4.svid"} {
+		if !strings.Contains(index, want) {
+			t.Fatalf("索引页缺少 %q:\n%s", want, index)
+		}
+	}
+	if !strings.Contains(index, "<details") {
+		t.Fatalf("索引页未按目录树分组：\n%s", index)
+	}
+
+	// 子目录中的条目也要有独立链接：title 里带相对路径，便于定位
+	links := regexp.MustCompile(`href="(/watch/[0-9a-f]+)" title="([^"]*)"`).FindAllStringSubmatch(index, -1)
+	byRel := map[string]string{}
+	for _, m := range links {
+		byRel[m[2]] = m[1]
+	}
+	if byRel["2024/nested.mov.svid"] == "" || byRel["top.mp4.svid"] == "" {
+		t.Fatalf("索引页链接的相对路径不符合预期: %v\n%s", byRel, index)
+	}
+
+	// 播放页：左侧常驻目录树，含当前条目高亮与其它片源链接
+	wpage := httpGetString(t, ts.URL+byRel["2024/nested.mov.svid"])
+	if !strings.Contains(wpage, "<aside") {
+		t.Fatalf("播放页左侧缺少目录树:\n%s", wpage)
+	}
+	if !strings.Contains(wpage, "top.mp4.svid") {
+		t.Fatalf("侧栏未列出其它片源（无法快速切换）:\n%s", wpage)
+	}
+	if !strings.Contains(wpage, "file active") {
+		t.Fatalf("侧栏未高亮当前条目:\n%s", wpage)
+	}
+	if !strings.Contains(wpage, "<video") {
+		t.Fatalf("播放页缺少播放器:\n%s", wpage)
+	}
+}
+
+// httpGetString 取一个页面为字符串。
+func httpGetString(t *testing.T, url string) string {
+	t.Helper()
+	resp, err := http.Get(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}

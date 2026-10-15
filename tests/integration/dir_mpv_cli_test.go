@@ -256,3 +256,142 @@ func TestM4MpvModeRejectsDirectory(t *testing.T) {
 		t.Fatalf("目录模式 + mpv 不应启动服务:\n%s", buf.String())
 	}
 }
+
+// TestM4PlayDirectoryTreeAndSidebar 覆盖 AC5.4/AC5.5：
+// 目录递归列出子目录中的密档并按目录树分组；播放页左侧常驻目录树可切换片源。
+func TestM4PlayDirectoryTreeAndSidebar(t *testing.T) {
+	dir := t.TempDir()
+	const pw = "tree passphrase"
+	keystore := newAccountForTest(t, dir, pw)
+
+	// 分门别类存放：库根一个、子目录两个
+	srcDir := filepath.Join(dir, "videos")
+	plain := map[string][]byte{}
+	for _, rel := range []string{"top.mp4", filepath.Join("season1", "ep1.mp4"), filepath.Join("season1", "ep2.mp4")} {
+		p := filepath.Join(srcDir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		plain[rel] = fakeMP4(3000 + len(rel)*100)
+		if err := os.WriteFile(p, plain[rel], 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// 目录级封存（顺带覆盖子目录镜像）
+	vaultDir := filepath.Join(dir, "vaults")
+	if out, err := runCLI(t, &script{secrets: []string{pw}}, "--account", keystore,
+		"seal", srcDir, "-o", vaultDir); err != nil {
+		t.Fatalf("目录封存失败: %v\n%s", err, out)
+	}
+
+	buf, done := startCLI(t, &script{secrets: []string{pw}},
+		"--account", keystore, "play", vaultDir, "--no-browser", "--idle", "10m")
+	base := waitForURL(t, buf)
+
+	// AC5.4：索引页递归列出子目录条目，并按目录树分组
+	index := fetchString(t, base)
+	for _, want := range []string{"season1", "ep1.mp4.svid", "ep2.mp4.svid", "top.mp4.svid"} {
+		if !strings.Contains(index, want) {
+			t.Fatalf("索引页缺少 %q:\n%s", want, index)
+		}
+	}
+	if !strings.Contains(index, "<details") {
+		t.Fatalf("索引页未按目录树分组:\n%s", index)
+	}
+
+	links := regexp.MustCompile(`href="(/watch/[0-9a-f]+)" title="([^"]*)"`).FindAllStringSubmatch(index, -1)
+	byRel := map[string]string{}
+	for _, m := range links {
+		byRel[m[2]] = m[1]
+	}
+	watch := byRel["season1/ep1.mp4.svid"]
+	if watch == "" {
+		t.Fatalf("索引页未给出子目录条目的链接: %v\n%s", byRel, index)
+	}
+
+	// AC5.5：播放页左侧常驻目录树，含其它片源可直接切换
+	wpage := fetchString(t, base+strings.TrimPrefix(watch, "/"))
+	if !strings.Contains(wpage, "<aside") {
+		t.Fatalf("播放页左侧缺少目录树:\n%s", wpage)
+	}
+	if !strings.Contains(wpage, "file active") {
+		t.Fatalf("侧栏未高亮当前条目:\n%s", wpage)
+	}
+	for _, want := range []string{"season1", "ep2.mp4.svid", "top.mp4.svid"} {
+		if !strings.Contains(wpage, want) {
+			t.Fatalf("侧栏缺少 %q（无法快速切换片源）:\n%s", want, wpage)
+		}
+	}
+
+	// 当前条目可播，且与原文逐字节一致
+	media := regexp.MustCompile(`src="(/media/[0-9a-f]+/[0-9a-f]+)"`).FindStringSubmatch(wpage)
+	if media == nil {
+		t.Fatalf("播放页没有媒体地址:\n%s", wpage)
+	}
+	got := fetchBytes(t, base+strings.TrimPrefix(media[1], "/"))
+	if !bytes.Equal(got, plain[filepath.Join("season1", "ep1.mp4")]) {
+		t.Fatal("子目录条目拉流内容与原文不一致（AC5.4 递归条目必须可播）")
+	}
+
+	// 从侧栏切到另一个片源（根目录的 top）也能播
+	other := byRel["top.mp4.svid"]
+	if other == "" {
+		t.Fatalf("索引页未给出根目录条目链接: %v", byRel)
+	}
+	opage := fetchString(t, base+strings.TrimPrefix(other, "/"))
+	omedia := regexp.MustCompile(`src="(/media/[0-9a-f]+/[0-9a-f]+)"`).FindStringSubmatch(opage)
+	if omedia == nil {
+		t.Fatalf("切换后的播放页没有媒体地址:\n%s", opage)
+	}
+	if got := fetchBytes(t, base+strings.TrimPrefix(omedia[1], "/")); !bytes.Equal(got, plain["top.mp4"]) {
+		t.Fatal("切换片源后拉流内容与原文不一致")
+	}
+
+	if lresp, err := http.Post(base+"lock", "text/plain", nil); err == nil {
+		lresp.Body.Close()
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("目录树模式 play 退出返回错误: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatalf("目录树模式锁定后未退出:\n%s", buf.String())
+	}
+}
+
+// fetchString 取页面文本。
+func fetchString(t *testing.T, url string) string {
+	t.Helper()
+	resp, err := http.Get(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("%s 状态码 = %d", url, resp.StatusCode)
+	}
+	return string(b)
+}
+
+// fetchBytes 取响应体字节。
+func fetchBytes(t *testing.T, url string) []byte {
+	t.Helper()
+	resp, err := http.Get(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("%s 状态码 = %d", url, resp.StatusCode)
+	}
+	return b
+}

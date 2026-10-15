@@ -38,7 +38,7 @@ safemedia seal ~/Movies -o ~/vaults                          # 整个目录（�
 
 # 3) 播放（起本地服务 + 自动开浏览器；Ctrl-C 或空闲 30 分钟自动锁定）
 safemedia play ~/vaults/clip.svid
-safemedia play ~/vaults/                  # 目录索引，点选播放
+safemedia play ~/vaults/                  # 目录索引（递归子目录，按目录树展示），点选播放
 safemedia play ~/vaults/clip.svid --player mpv      # 交给 mpv（HEVC 等）
 ```
 

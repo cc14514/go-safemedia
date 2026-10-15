@@ -171,7 +171,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	fmt.Fprint(w, playerPage(s.opts.Name, s.MediaPath(), ""))
+	fmt.Fprint(w, playerPage(s.opts.Name, s.MediaPath(), "", treeNode{}, ""))
 }
 
 // writeNoCacheHeaders 禁止浏览器缓存明文（威胁模型 b）。

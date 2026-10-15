@@ -31,8 +31,11 @@ func newPlayCmd() *cobra.Command {
 		Long: `启封 .svid 密档并播放。
 
   safemedia play clip.svid              浏览器播放单个密档
-  safemedia play ~/vaults/              浏览器打开目录索引，点选播放
+  safemedia play ~/vaults/              浏览器打开密档库索引（递归子目录），点选播放
   safemedia play clip.svid --player mpv 交给 mpv 播放（HEVC 等全格式逃生通道）
+
+目录模式的索引页与播放页都按目录树（含子目录）展示密档，
+播放页左侧常驻目录树，点击即可切换片源；全屏播放时目录树自动隐藏。
 
 解密流只经 127.0.0.1 环回端口送出，明文不落盘；
 空闲超过 --idle 会自动锁定并清零内存中的密钥，Ctrl-C 亦立即锁定。`,
@@ -133,7 +136,7 @@ func playDirectory(out io.Writer, dir string, priv *ecdsa.PrivateKey, player str
 		return err
 	}
 	if len(entries) == 0 {
-		fmt.Fprintf(out, "⚠ %s 下没有 .svid 密档，索引页将显示空列表提示。\n", dir)
+		fmt.Fprintf(out, "⚠ %s 及其子目录下没有 .svid 密档，索引页将显示空列表提示。\n", dir)
 	}
 
 	lib, err := play.NewLibrary(play.LibraryOptions{
@@ -149,7 +152,7 @@ func playDirectory(out io.Writer, dir string, priv *ecdsa.PrivateKey, player str
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "▶ 密档库索引已就绪（仅本机）：%s\n  共 %d 个密档\n", url, lib.Count())
+	fmt.Fprintf(out, "▶ 密档库索引已就绪（仅本机）：%s\n  共 %d 个密档（递归含子目录，按目录树展示）\n", url, lib.Count())
 
 	if !noBrowser {
 		if err := openBrowser(url); err != nil {

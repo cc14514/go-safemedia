@@ -6,8 +6,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -22,9 +22,76 @@ const VaultSuffix = ".svid"
 // Entry 是索引页中的一个密档条目。
 type Entry struct {
 	Name string // 展示名（密档文件名，不回显原始视频名）
+	Rel  string // 相对库根的路径（以 / 分隔），用于目录树分组
 	Path string // 磁盘路径
 	Size int64  // 密档体积（字节）
 	id   string // 内部随机 id，仅用于 URL
+}
+
+// treeNode 是渲染用的目录节点（AC5.4）。
+type treeNode struct {
+	Name  string // 目录名（库根为空）
+	Files []treeFile
+	Dirs  []treeNode
+}
+
+// treeFile 是目录树中的一个密档叶子。
+type treeFile struct {
+	Label string // 相对库根的路径（悬停提示，便于同名文件区分）
+	Name  string // 展示名
+	Size  string
+	Link  string // /watch/<id>
+}
+
+func (n *treeNode) empty() bool { return len(n.Files) == 0 && len(n.Dirs) == 0 }
+
+func (n *treeNode) count() int {
+	c := len(n.Files)
+	for i := range n.Dirs {
+		c += n.Dirs[i].count()
+	}
+	return c
+}
+
+// buildTree 把条目按相对路径组织成目录树。
+func buildTree(entries []Entry) treeNode {
+	var root treeNode
+	for _, e := range entries {
+		segs := strings.Split(e.Rel, "/")
+		insertInto(&root, segs[:len(segs)-1], treeFile{
+			Label: e.Rel,
+			Name:  e.Name,
+			Size:  humanBytes(e.Size),
+			Link:  "/watch/" + e.id,
+		})
+	}
+	sortNode(&root)
+	return root
+}
+
+// insertInto 把叶子插入到 dirs 指定的层级（按需创建中间目录）。
+func insertInto(n *treeNode, dirs []string, f treeFile) {
+	if len(dirs) == 0 {
+		n.Files = append(n.Files, f)
+		return
+	}
+	for i := range n.Dirs {
+		if n.Dirs[i].Name == dirs[0] {
+			insertInto(&n.Dirs[i], dirs[1:], f)
+			return
+		}
+	}
+	n.Dirs = append(n.Dirs, treeNode{Name: dirs[0]})
+	insertInto(&n.Dirs[len(n.Dirs)-1], dirs[1:], f)
+}
+
+// sortNode 递归按名称排序（目录在前，密档在后）。
+func sortNode(n *treeNode) {
+	sort.Slice(n.Dirs, func(i, j int) bool { return n.Dirs[i].Name < n.Dirs[j].Name })
+	sort.Slice(n.Files, func(i, j int) bool { return n.Files[i].Name < n.Files[j].Name })
+	for i := range n.Dirs {
+		sortNode(&n.Dirs[i])
+	}
 }
 
 // LibraryOptions 是目录模式播放服务的配置。
@@ -46,34 +113,65 @@ type Library struct {
 	token   string
 	byID    map[string]Entry
 	order   []Entry
+	tree    treeNode
 	handler http.Handler
 }
 
-// ScanLibrary 扫描目录下的 .svid（不递归），返回按名称排序的条目。
+// ScanLibrary 递归扫描目录下的 .svid（AC5.4），返回按相对路径排序的条目。
+//
+// 跳过：隐藏项（`.` 开头）、符号链接（避免越出库根）、非 .svid 文件。
 func ScanLibrary(dir string) ([]Entry, error) {
-	items, err := os.ReadDir(dir)
+	root := filepath.Clean(dir)
+	var entries []Entry
+	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			if p == root {
+				return err
+			}
+			return nil // 子目录不可读：跳过该分支，不让整次扫描失败
+		}
+		if p == root {
+			return nil
+		}
+		name := d.Name()
+		if strings.HasPrefix(name, ".") {
+			if d.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if d.Type()&fs.ModeSymlink != 0 {
+			if d.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if !strings.EqualFold(filepath.Ext(name), VaultSuffix) {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return nil
+		}
+		rel, err := filepath.Rel(root, p)
+		if err != nil {
+			return nil
+		}
+		entries = append(entries, Entry{
+			Name: name,
+			Rel:  filepath.ToSlash(rel),
+			Path: p,
+			Size: info.Size(),
+		})
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	var entries []Entry
-	for _, it := range items {
-		if it.IsDir() || strings.HasPrefix(it.Name(), ".") {
-			continue
-		}
-		if !strings.EqualFold(filepath.Ext(it.Name()), VaultSuffix) {
-			continue
-		}
-		info, err := it.Info()
-		if err != nil {
-			continue
-		}
-		entries = append(entries, Entry{
-			Name: it.Name(),
-			Path: filepath.Join(dir, it.Name()),
-			Size: info.Size(),
-		})
-	}
-	sort.Slice(entries, func(i, j int) bool { return entries[i].Name < entries[j].Name })
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Rel < entries[j].Rel })
 	return entries, nil
 }
 
@@ -103,6 +201,7 @@ func NewLibrary(opts LibraryOptions) (*Library, error) {
 		l.byID[e.id] = e
 		l.order = append(l.order, e)
 	}
+	l.tree = buildTree(l.order)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", l.handleIndex)
@@ -147,13 +246,9 @@ func (l *Library) handleIndex(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	rows := make([]indexRow, 0, len(l.order))
-	for _, e := range l.order {
-		rows = append(rows, indexRow{Name: e.Name, Size: humanBytes(e.Size), Link: "/watch/" + e.id})
-	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	fmt.Fprint(w, indexPage(rows))
+	fmt.Fprint(w, indexPage(l.tree))
 }
 
 func (l *Library) handleWatch(w http.ResponseWriter, r *http.Request) {
@@ -165,7 +260,8 @@ func (l *Library) handleWatch(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	fmt.Fprint(w, playerPage(e.Name, "/media/"+l.token+"/"+e.id, "/"))
+	// 播放页左侧常驻目录树（AC5.5），当前条目高亮。
+	fmt.Fprint(w, playerPage(e.Name, "/media/"+l.token+"/"+e.id, "/", l.tree, "/watch/"+e.id))
 }
 
 func (l *Library) handleMedia(w http.ResponseWriter, r *http.Request) {

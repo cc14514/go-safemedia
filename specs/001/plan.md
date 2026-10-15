@@ -77,7 +77,7 @@ tests/e2e/              L3 + REPORT.md
 
 - 监听 `127.0.0.1:0`（随机端口）；单文件模式路由 `/stream`；目录模式路由 `/`（索引页）+ `/v/<i>/stream`。
 - HTTP：支持 `Range`（AC4.2 seek）；`Content-Type` 按解密后明文首 12 字节嗅探（`ftyp`→video/mp4；`1A45DFA3`→video/webm），容器提示仅作 fallback。
-- 索引页：纯静态 HTML，列出目录下 .svid 文件名（AC5.1–5.3，无额外元数据）。
+- 索引页：纯静态 HTML，列出目录下 .svid 文件名（AC5.1–5.3，无额外元数据）。**递归**子目录并按目录树（`<details>` 折叠）分组（AC5.4）；播放页左侧栏复用同一棵树、当前条目高亮（AC5.5）。树在启动时扫描一次（`ScanLibrary` → `buildTree`），跳过隐藏项与符号链接。
 - 播放页：`<video controls autoplay>` + JS 监听 `video.error`/长时间 `stalled` → 页内提示改用 `--player mpv`（AC4.5）。
 - 拉起：macOS `open` / Linux `xdg-open`；`--player mpv` 时改拉 `mpv http://127.0.0.1:<port>/stream`（mpv 不存在→明确报错，AC6.2）。
 - **锁定**（US8）：SIGINT/SIGTERM/EOF → 关闭监听、`runtime.KeepAlive` 后对私钥/文件密钥字节切片显式清零（AC8.1）；30 分钟无请求 → 自动关停（AC8.2）。
@@ -117,7 +117,7 @@ safemedia play <vault.svid|dir> [--account <path>] [--player browser|mpv]
 | M1 | go.mod、cobra 骨架、Makefile、internal/account（创建/恢复/导出）+ L1 测试 | US1、US2 |
 | M2 | internal/vault 格式 + seal 命令 + 白名单 + L1/L2 | US3 |
 | M3 | Playback Server（Range/嗅探/拉起/锁定/清零/空闲超时）+ L2 | US4、US8 |
-| M4 | 目录索引页 + `--player mpv` + L2 | US5、US6 |
+| M4 | 目录索引页 + 目录树侧栏 + `--player mpv` + L2 | US5、US6 |
 | M5 | E2E：浏览器实测、iPhone mov 实机、双机搬运、REPORT.md（Pre/Post 表）、README、易错点回流 AGENTS.md | US7、L3 |
 
 ## 10. 测试策略（三层门禁映射）
