@@ -175,8 +175,19 @@
 - [x] T11.6 引擎实现：路由 + 与 `/drop` 共用的 `startSealFromPaths`；面板工具栏两个按钮（`HasPicker` 控制）；警示框渲染 `Error`；空态文案补「或点上方选择…」（AC11.6/11.8）。
 - [x] T11.7 外壳修复：`DisableWebViewDrop: true`；`runtime.OnFileDrop` 事件写进程日志（诊断）；`picker` 适配器（`OpenMultipleFilesDialog` 过滤 mp4/mov/webm / `OpenDirectoryDialog`）经 `LibraryOptions.Picker` 注入；`App.ctx` 加锁存取（对话框需在 startup 之后调用）。
 - [x] T11.8 页面样式：引擎页面根元素加 `--wails-drop-target: drop`（Wails 拖放目标标记），`page_style_test.go` 钉住它存在。
-- [x] T11.9 （测试先行）L2 `tests/integration/seal_pick_test.go`：进程内真队列 + 假选择器，走「选取文件/文件夹 → 实时进度 → 完成 → 新密档可启封」全链路（与拖入同管线）。
+- [x] T11.9 （测试先行）L2 `tests/integration/seal_pick_flow_test.go`：进程内真队列 + 假选择器，走「选取文件/文件夹 → 实时进度 → 完成 → 新密档可启封」全链路（与拖入同管线）。
 - [x] T11.10 文档：`docs/requirements.md`（FR-6.16/6.17）、`specs/002/*`（US11 + 计划 18 + 本段）、`README.md` / `docs/manual.md`（两种封存入口）、`CONTEXT.md`（术语「选择器（FilePicker）」）、`AGENTS.md`（US10/US11 要点 + 易错点 9/10/11）。
+
+## M12 · 应用图标（用户 2026-10-16 反馈「icon 不好看，要突出安全性的播放器 icon」）
+
+> 反馈：「功能 ok 了，icon 不好看，能不能给我来一个好看点的 icon 呀？需要一个突出安全性的播放器 icon」。设计：盾牌（安全）+ 镂空播放三角（播放器），深靛蓝底板 + 翠绿盾牌；Apple 风格连续圆角（超椭圆 n=5）底板、Tahoe 兼容（系统会按自身样式裁切/补光）。实现顺带修掉两个构建缺陷：Wails 内置 icns 编码器只写 5 个 @2x 尺寸且用最近邻缩放（小尺寸锯齿），以及 `desktop/build/` 整目录被 .gitignore 忽略会把图标源一起吞掉（同 `desktop/frontend/dist/index.html` 那次教训）。
+
+- [x] T12.1 （测试先行）`desktop/icon_test.go`：图标为 1024×1024、四角透明、含翠绿（盾牌）与深靛蓝（底板）像素分布 —— 换成 Wails 默认灰阶图标即判红；`build/appicon.svg` 必须在库（AC5.6）。
+- [x] T12.2 图标源：`desktop/build/appicon.svg`（含注释，可手改）+ 由它渲染的 1024×1024 `appicon.png`；`make desktop-icon-svg` 用无头 Chrome 重渲染（不引入 Node）。
+- [x] T12.3 构建管线：`make desktop-icon` 用 `sips` 生成 10 个尺寸 → `iconutil -c icns` 写全尺寸 `.icns` → `codesign --force --deep --sign -` 重新自签（`.icns` 属于被封存的资源，替换后必须重签）；`make desktop` 自动调用（AC5.6）。
+- [x] T12.4 `.gitignore` 收窄：只忽略构建输出（`desktop/build/bin|darwin|windows|icon.iconset`），图标源入库；`make clean` 同步（不再 `rm -rf desktop/build`）。
+- [x] T12.5 验证：`.icns` 含 10 个尺寸、`codesign --verify --deep --strict` 通过；**变异验证** —— 换成灰阶图标 → T12.1 判红；最近邻 32px 与本仓库 sips 32px 的图像对比（人眼核对）。
+- [x] T12.6 文档：`specs/002/*`（AC5.6 + 本段）、`AGENTS.md`（易错点 12 + 结构 + 命令）。
 
 ## 收尾
 

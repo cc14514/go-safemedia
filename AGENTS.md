@@ -24,9 +24,11 @@ go test -race ./internal/play/...            # 门控/锁定改动后必跑（�
 
 # 桌面外壳与分发（首版仅 macOS/arm64）
 make desktop                       # wails build -s -> desktop/build/bin/safemedia.app（需 wails CLI + Xcode CLT）
+                                   # 末步自动跑 desktop-icon：sips+iconutil 重做 .icns 并重新自签
+make desktop-icon-svg              # 只在改图标时用：由 build/appicon.svg 渲染 1024 的 appicon.png（无头 Chrome）
+make desktop-test                  # 只跑外壳相关单测，不需要 wails CLI
 make dist VERSION=0.2.0            # -> dist/safemedia_<ver>_darwin-arm64.zip（.app + CLI + 说明.txt）
 make release VERSION=0.2.0         # gh release create/upload（需 gh 已登录）
-make desktop-test                  # 只跑外壳相关单测，不需要 wails CLI
 
 # L3 真实样本（fetch-samples.sh 需联网下载 4 个样本）
 tests/e2e/fetch-samples.sh /tmp/safemedia-samples
@@ -45,7 +47,9 @@ internal/seal/       collect.go 输入展开（CLI 与页面共用）/ queue.go 
 internal/cli/        cobra 命令（中文输出）、prompt.go 交互、exit.go 退出码
 internal/version/    构建时注入的版本号（CLI 与外壳共用，见 Makefile 的 LDFLAGS）
 internal/desktopcfg/ 外壳的目标解析（启动参数 > desktop.json > 默认库）、账户发现（accounts.go）与配置读写
-desktop/             Wails v2 外壳：main.go（接线 + 原生拖放）、sealer.go（封存队列工厂）+ frontend/dist/index.html（引导页）+ wails.json
+desktop/             Wails v2 外壳：main.go（接线 + 原生拖放）、sealer.go（封存队列工厂）、picker.go（系统选择对话框）
+                     frontend/dist/index.html（引导页，**源码**，别被忽略）+ build/appicon.svg+png（应用图标源，**源码**）
+                     build/bin|darwin|windows|icon.iconset 是构建输出（.gitignore 只忽略这些）
 tests/integration/   L2 黑盒/灰盒（进程内执行 CLI；desktop_flow_test.go 覆盖外壳链路）
 tests/e2e/           L3 端到端 + REPORT.md + fetch-samples.sh
 ```
@@ -85,6 +89,7 @@ tests/e2e/           L3 端到端 + REPORT.md + fetch-samples.sh
 9. **首屏数据必须用 JS 对象字面量注入，不能用 `<script type="application/json">` + `JSON.parse`**：`html/template` 在该位置按 **JS 上下文**转义，注入的是带引号的**字符串字面量**，`JSON.parse` 返回字符串而非对象 → 首屏**静默渲染成空**、脚本不报错、Go 测试全绿。正确写法 `const boot = {{.Status}};`。相关：**别用 `--dump-dom` 断言「页面里有某个字符串」**——它会把 `<script>` 里注入的数据一并打出来，缺陷版本照样「包含」；断言要落在**只有渲染才会产生的序列化结果**上（如空态被改样式后的 `id="empty" style="display: none;"`）。这两条只能靠**真无头 Chrome 执行页面**发现（`make test-l3` 的 `TestE2E_SealPanel*`）。
 10. **Wails 拖放失效的根因在 `DisableWebViewDrop`**：Wails 源码注释原文——WebView 只有在 `DisableWebViewDrop=true` 时**才无条件接管拖放**，否则「是否放行由页面的行为决定」，表现为拖入被吞掉。因此外壳必须设 `DisableWebViewDrop:true`，且**引擎页面根元素要声明 `--wails-drop-target: drop`**（`page_style_test.go` 钉住）。**任何依赖真实鼠标拖动的功能都要另留一条不依赖拖放的入口**（这里是面板上的「选择视频文件…／选择文件夹…」，走 `runtime.OpenFileDialog`），因为**拖放的可达性只有人能验**：自动化只能覆盖「投递 API → 队列 → 面板」。相关：Wails 的 `Filters[].Pattern` 会把 `*.` **剥掉**后把剩下的字符串当扩展名交给系统面板（macOS 走 `UTType typeWithFilenameExtension:`），所以**只给具体扩展名**（`*.mp4;*.mov;*.webm`）；写 `*.*` 会变成扩展名 `*` —— 实测 macOS 返回的是**无意义的 dynamic UTType**（`dyn.ah62d4rv4ge8wy`，不是「所有文件」也匹配不到真实文件），空扩展名才返回 nil。`desktop/picker_test.go` 的 `TestPickerFiltersUseConcreteExtensions` 钉住。
 11. **「不覆盖」判定失败时绝不能清理目标文件**：`vault.SealOptions{Overwrite:false}` 在**写第一个字节之前**就用 `O_EXCL` 判定并返回 `ErrTargetExists`，此时目标文件是**用户既有的密档**。队列若一律「失败即删掉半成品」，就会把用户既有的密档删掉（曾致 L2 用例报 `open …a.mp4.svid: no such file or directory`，属**数据丢失**）。区分「自己写了一半的产物」与「预先存在的目标」：只有前者可删。
+12. **Wails 内置的 icns 编码器不能用**：`internal/build/packager.go` 把原始 1024 图交给 `icns.Encode`，而该库 `Encoder.Algorithm` 零值 = **NearestNeighbor**（源码 `interpolation.go` + `icns.go` 注释「Uses nearest neighbor as interpolation algorithm」），且产物只有 **5 个 @2x 条目**（缺 16/32/128/256/512 的 1x）→ 32px 及以下锯齿明显（人眼对比过：最近邻 32px 边缘呈方块状）。本仓库改为 `sips` 逐尺寸高质量缩放 → `iconutil -c icns`（10 个条目）。**`.icns` 属被封存的资源**，替换后签名失效，必须紧跟 `codesign --force --deep --sign - <app>`（Wails 自己在包好资源后也是这一步），验证用 `codesign --verify --deep --strict`。图标源 `desktop/build/appicon.svg`+`appicon.png` 必须入库（`desktop/icon_test.go` 钉住存在且不是默认灰阶图标）；**注意别把 `desktop/build/` 整目录写进 .gitignore**——它会连带吞掉图标源（与 `desktop/frontend/dist/index.html` 同一类事故）。改图标：改 SVG → `make desktop-icon-svg` → `make desktop`。
 
 ## 目录树 / 播放页（目录模式）要点
 
@@ -108,7 +113,7 @@ tests/e2e/           L3 端到端 + REPORT.md + fetch-samples.sh
 - **封存不覆盖已存在的密档**：`vault.SealOptions{Overwrite:false}` 用 `O_EXCL` 在写第一个字节之前判定（`ErrTargetExists`）；CLI 仍走 `SealFileWithProgress`（默认覆盖，语义不变）。取消/失败清理半成品（其中不含明文）。
 - **创建账户的助记词只出现一次**：`Create` 生成账户 → 助记词只在内存 challenge 里（`putChallenge`）→ 复述抽查通过后才 `ConfirmCreate` 写盘；助记词**从不预写盘**（cli 也是这个顺序），`CancelCreate` 丢弃。抽查失败可重抄，口令与助记词不回显到页面。账户管理页响应头同样 `no-store`，webview 不留缓存。
 - **库根在页面里可换**（US7）：索引页 → `/library` 目录选择页（逐级浏览 + 每目录直含密档数）→ `POST /library` → `SetRoot` 规范路径、重扫、原子替换 root/tree/byID/order（`id` 重新分配）→ 回调 `LibraryOptions.OnLibraryChange`（外壳写 `desktop.json` 并保留 account 字段；CLI 不传该回调，选择只对本次会话有效）。非法路径**不改动任何状态**、在页面内显示中文原因；`~` 会展开、相对路径规范为绝对路径。锁定态一律回登录页（不枚举本机目录）。
-- 分发：`make desktop` → `make dist`（`.app` + CLI 打成 zip）→ `make release`（`gh`）。首版仅 macOS/arm64、不签名不公证；arm64 上 Go 自动 ad-hoc 签名，用户只需 `xattr -dr com.apple.quarantine`。
+- 分发：`make desktop`（含图标 `.icns` 重做与重新自签）→ `make dist`（`.app` + CLI + 说明打成 zip）→ `make release`（`gh`）。首版仅 macOS/arm64、不签名不公证；arm64 上 Go 自动 ad-hoc 签名，用户只需 `xattr -dr com.apple.quarantine`。发版前可跑 `codesign --verify --deep --strict desktop/build/bin/safemedia.app` 确认签名仍然有效。
 - **明文红线在 webview 缓存上已验证**：WKWebView 用持久化数据仓库（`~/Library/Caches/<bundle-id>/WebKit`、`~/Library/WebKit/<bundle-id>`），但它尊重 `Cache-Control: no-store`——对照实验（可缓存对照有残留、引擎 `no-store` 响应与真实 mp4 流零残留）见 `tests/e2e/REPORT.md` 的 002 段。**改播放页/媒体响应头时不得去掉 `no-store`。**
 
 ## 本机环境（opencode 网关）

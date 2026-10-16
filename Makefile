@@ -9,6 +9,9 @@ LDFLAGS := -X github.com/cc14514/go-safemedia/internal/version.Version=$(VERSION
 # 桌面外壳（Wails v2）。本机 npm 不可用，故用 -s 跳过前端构建（不需要 Node）。
 WAILS   ?= $(shell go env GOPATH)/bin/wails
 DESKTOP := desktop/build/bin/safemedia.app
+ICONSET := desktop/build/icon.iconset
+# 图标源 SVG → PNG 用无头 Chrome（L3 已依赖它）；macOS 无内置 SVG 光栅化器（sips 不支持 SVG）。
+CHROME  ?= /Applications/Google Chrome.app/Contents/MacOS/Google Chrome
 
 # 首版分发规格：仅 macOS / arm64，见 specs/002/spec.md 的 Scope。
 DIST    := dist
@@ -18,7 +21,7 @@ PKGNAME := safemedia_$(VERSION)_$(ARCH)
 TAG     := v$(patsubst v%,%,$(VERSION))
 
 .PHONY: all build test test-l1 test-l2 test-l3 lint vet fmt clean smoke \
-        desktop desktop-test desktop-run dist release
+        desktop desktop-icon desktop-icon-svg desktop-test desktop-run dist release
 
 all: build
 
@@ -58,6 +61,37 @@ desktop:
 	@command -v $(WAILS) >/dev/null 2>&1 || { \
 	  echo "缺少 wails CLI。安装：go install github.com/wailsapp/wails/v2/cmd/wails@v2.16.0"; exit 1; }
 	cd desktop && $(WAILS) build -s -ldflags "$(LDFLAGS) -w -s"
+	@$(MAKE) --no-print-directory desktop-icon
+
+## 用 sips + iconutil 重做 .icns 并重新自签（Wails 内置的 icns 编码器只写 5 个 @2x 尺寸、
+## 且用最近邻算法缩放，小尺寸会糊；iconutil 会写全 10 个尺寸并做高质量缩放）
+desktop-icon:
+	@command -v iconutil >/dev/null 2>&1 || { echo "缺少 iconutil（Xcode Command Line Tools）"; exit 1; }
+	@test -f desktop/build/appicon.png || { echo "缺少 desktop/build/appicon.png（见 make desktop-icon-svg）"; exit 1; }
+	@rm -rf $(ICONSET) && mkdir -p $(ICONSET)
+	@for s in 16 32 64 128 256 512 1024; do \
+	  sips -z $$s $$s desktop/build/appicon.png --out $(ICONSET)/r$$s.png >/dev/null; done
+	@cp $(ICONSET)/r16.png   $(ICONSET)/icon_16x16.png
+	@cp $(ICONSET)/r32.png   $(ICONSET)/icon_16x16@2x.png
+	@cp $(ICONSET)/r32.png   $(ICONSET)/icon_32x32.png
+	@cp $(ICONSET)/r64.png   $(ICONSET)/icon_32x32@2x.png
+	@cp $(ICONSET)/r128.png  $(ICONSET)/icon_128x128.png
+	@cp $(ICONSET)/r256.png  $(ICONSET)/icon_128x128@2x.png
+	@cp $(ICONSET)/r256.png  $(ICONSET)/icon_256x256.png
+	@cp $(ICONSET)/r512.png  $(ICONSET)/icon_256x256@2x.png
+	@cp $(ICONSET)/r512.png  $(ICONSET)/icon_512x512.png
+	@cp $(ICONSET)/r1024.png $(ICONSET)/icon_512x512@2x.png
+	iconutil -c icns $(ICONSET) -o $(DESKTOP)/Contents/Resources/iconfile.icns
+	codesign --force --deep --sign - $(DESKTOP)
+
+## 由 SVG 源渲染出 1024×1024 的 appicon.png（仅在改图标时需要；用无头 Chrome，不引入 Node 依赖）
+desktop-icon-svg:
+	@test -f desktop/build/appicon.svg || { echo "缺少 desktop/build/appicon.svg"; exit 1; }
+	@command -v "$(CHROME)" >/dev/null 2>&1 || { echo "缺少 Chrome：$(CHROME)"; exit 1; }
+	rm -f desktop/build/appicon.png
+	"$(CHROME)" --headless=new --disable-gpu --hide-scrollbars --force-device-scale-factor=1 \
+	  --window-size=1024,1024 --screenshot=desktop/build/appicon.png "file://$(PWD)/desktop/build/appicon.svg"
+	@sips -g pixelWidth -g pixelHeight -g hasAlpha desktop/build/appicon.png | tail -3
 
 ## 仅跑外壳的单元测试（不需要 wails CLI）
 desktop-test:
@@ -111,4 +145,4 @@ release: dist
 	@echo "▶ 已发布 $(TAG)"
 
 clean:
-	rm -rf bin $(DIST) desktop/build
+	rm -rf bin $(DIST) desktop/build/bin desktop/build/darwin desktop/build/icon.iconset desktop/frontend/wailsjs

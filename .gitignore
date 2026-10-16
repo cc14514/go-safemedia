@@ -28,7 +28,10 @@ bin/
 # --- 工具链状态（非项目源） ---
 .cortexkit/
 .omo/
-# --- 分发产物与桌面外壳构建输出（Wails 生成；源码只有 main.go / wails.json / frontend/dist/index.html） ---
+# --- 分发产物与桌面外壳构建输出（Wails 生成；源码是 main.go / wails.json / frontend/dist/index.html / build/appicon.svg+png） ---
 /dist/
-desktop/build/
+desktop/build/bin/
+desktop/build/darwin/
+desktop/build/windows/
+desktop/build/icon.iconset/
 desktop/frontend/wailsjs/

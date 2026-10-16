@@ -62,6 +62,7 @@
 - **AC5.3** Given 版本注入，When 执行 `safemedia --version`，Then 显示由 `-ldflags -X` 注入的版本（未注入时为 `dev`）。
 - **AC5.4** Given `gh` 已登录且已打 tag，When 执行 `make release`，Then 创建 GitHub Release 并把 zip 作为资产上传。
 - **AC5.5** Given 发行包，When 解压，Then 其中的 CLI 与 `.app` 来自同一版本、同一提交。
+- **AC5.6**（应用图标）Given 全新 clone 后执行 `make desktop`，When 打开 `.app`（Finder/Dock/⌘Tab），Then 显示本项目的图标（深靛蓝底板 + 翠绿盾牌 + 镂空播放三角），**不是** Wails 默认的灰阶图标；`.icns` 含全部 10 个尺寸（1x 与 @2x），且替换图标后 `.app` 仍通过 `codesign --verify --deep --strict`（构建末步重新 ad-hoc 自签）。图标源 `desktop/build/appicon.svg`（可改）与渲染产物 `appicon.png` 必须入库，由 `desktop/icon_test.go` 钉住（缺源、或换成灰阶默认图标都判红）。
 
 ### US6 引擎与 CLI 回归（不退化）
 
