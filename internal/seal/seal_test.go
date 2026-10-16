@@ -271,27 +271,38 @@ func TestQueueSealsSequentiallyWithProgress(t *testing.T) {
 	}
 }
 
+// T10.5b（AC10.5）：目标已存在一律「跳过」，且**不得删除既有的密档**。
+//
+// 这条用例必须同时覆盖 RemovePartialOnFailure 的两种取值：桌面外壳/页面传 true 用于
+// 清理「写了一半的密档」，曾因此把**别人的既有密档**当半成品删掉（ErrTargetExists 是
+// 在写第一个字节之前判定的，那时 dst 根本不由我们创建）——真实数据丢失，由 L2 用例发现。
 func TestQueueDoesNotOverwriteExisting(t *testing.T) {
-	dir := t.TempDir()
-	src := filepath.Join(dir, "a.mp4")
-	writeFile(t, src, fakeMP4(4096))
-	dst := src + ".svid"
-	writeFile(t, dst, []byte("已有内容"))
-	priv := testKey(t)
+	for _, removePartial := range []bool{false, true} {
+		t.Run(map[bool]string{false: "不清理半成品", true: "清理半成品"}[removePartial], func(t *testing.T) {
+			dir := t.TempDir()
+			src := filepath.Join(dir, "a.mp4")
+			writeFile(t, src, fakeMP4(4096))
+			dst := src + ".svid"
+			writeFile(t, dst, []byte("已有内容"))
+			priv := testKey(t)
 
-	q := NewQueue([]Job{{Src: src, Dst: dst}}, Options{})
-	q.Start(&priv.PublicKey)
-	q.Wait()
+			q := NewQueue([]Job{{Src: src, Dst: dst}}, Options{RemovePartialOnFailure: removePartial})
+			q.Start(&priv.PublicKey)
+			q.Wait()
 
-	it := q.Items()[0]
-	if it.State != StateSkipped {
-		t.Fatalf("已存在的目标应跳过，得到 %+v", it)
-	}
-	if b, _ := os.ReadFile(dst); string(b) != "已有内容" {
-		t.Fatal("目标密档被改写了（不得覆盖，AC10.5）")
-	}
-	if it.Reason == "" {
-		t.Fatal("跳过应带原因")
+			it := q.Items()[0]
+			if it.State != StateSkipped {
+				t.Fatalf("已存在的目标应跳过，得到 %+v", it)
+			}
+			if b, err := os.ReadFile(dst); err != nil {
+				t.Fatalf("既有密档被删除了（不得覆盖，AC10.5）: %v", err)
+			} else if string(b) != "已有内容" {
+				t.Fatal("目标密档被改写了（不得覆盖，AC10.5）")
+			}
+			if it.Reason == "" {
+				t.Fatal("跳过应带原因")
+			}
+		})
 	}
 }
 

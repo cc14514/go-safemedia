@@ -199,7 +199,10 @@ func (q *Queue) step(idx int, pub *ecdsa.PublicKey) bool {
 		func(done, total int64) { q.progress(idx, done, total) })
 	if err != nil {
 		canceled := errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
-		if q.opts.RemovePartialOnFailure || canceled {
+		// 只清理「我们自己写出来的」半成品。
+		// 目标已存在（ErrTargetExists，AC10.5 的判定发生在写第一个字节之前）时 dst 是
+		// **别人的密档**：删它等于毁掉用户既有的密档 —— 曾因无条件 os.Remove(dst) 丢数据。
+		if !errors.Is(err, vault.ErrTargetExists) && (q.opts.RemovePartialOnFailure || canceled) {
 			_ = os.Remove(dst) // 半成品不含明文，删除安全
 		}
 		q.fail(idx, err, canceled)
