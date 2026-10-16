@@ -49,7 +49,7 @@ safemedia play ~/vaults/clip.svid --player mpv      # 交给 mpv（HEVC 等）
 
 登录页会在**下拉框里列出本机所有账户**（`~/.safemedia/*.json` 与 `~/.safemedia/accounts/*.json`；每项显示文件名 + 地址短形式），**必须选对账户并输入该账户的口令**才能解锁——选错账户不会解密任何内容，只会提示「口令错误或与所选账户不匹配」。
 
-**从 Release 安装**（推荐）：
+**从 Release 安装**（推荐）：打开 [Releases 页面](https://github.com/cc14514/go-safemedia/releases/latest)，
 
 1. 下载 `safemedia_<版本>_darwin-arm64.zip` 并解压；
 2. 首次双击 `safemedia.app` 若被 Gatekeeper 拦住（未签名/未公证），执行一次：
@@ -58,13 +58,21 @@ safemedia play ~/vaults/clip.svid --player mpv      # 交给 mpv（HEVC 等）
    xattr -dr com.apple.quarantine /path/to/safemedia.app
    ```
 
-   然后重新双击即可。（首版不做签名与公证，仅 Apple Silicon；Intel 需自行从源码构建。）
+   然后重新双击即可。（首版不做签名与公证，仅 Apple Silicon。**Intel Mac / Windows / Linux 请从源码构建**——命令行是纯 Go、无 cgo，可直接交叉编译，见下。）
 
-**从源码构建**（需要 `wails` CLI 与 Xcode 命令行工具，不需要 Node）：
+**从源码构建**（桌面外壳需要 `wails` CLI 与 Xcode 命令行工具，不需要 Node）：
 
 ```sh
 make desktop        # -> desktop/build/bin/safemedia.app
 make desktop-run    # 构建并直接运行
+```
+
+只要**命令行**（纯 Go、无 cgo，可交叉编译到 Intel Mac / Windows / Linux）：
+
+```sh
+make build                                                    # -> bin/safemedia
+CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o safemedia.exe ./cmd/safemedia
+CGO_ENABLED=0 GOOS=linux   GOARCH=arm64 go build -o safemedia-linux ./cmd/safemedia
 ```
 
 **看哪个库**：打开后**在界面里选** —— 索引页点「选择密档库（换扫描目录）…」，像文件浏览器一样逐级进入目录（面包屑、上级、每个子目录显示直含密档数），点「使用此目录作为库根」立即按该目录的子目录结构重扫并展示；选择会被记住（写入 `~/.safemedia/desktop.json`），下次启动仍用它。
