@@ -136,12 +136,17 @@ dist: desktop
 	@du -h $(DIST)/$(PKGNAME).zip
 
 ## 发布到 GitHub Release（需 gh 已登录；自动创建/复用 $(TAG) 标签）
+## 发行说明：默认由 gh 生成；要手写就传 NOTES=docs/releases/v$(VERSION).md
+## 注意：gh 在标签不存在时把它指向**远端默认分支的 HEAD**，所以发版前先 git push origin main，
+##       否则标签与资产对不上代码（发完用 `gh release view $(TAG) --json tagName` 与
+##       `git rev-parse HEAD` 对一下）。
 release: dist
 	@command -v gh >/dev/null 2>&1 || { echo "缺少 gh CLI"; exit 1; }
 	gh release view $(TAG) >/dev/null 2>&1 \
 	  && gh release upload $(TAG) $(DIST)/$(PKGNAME).zip --clobber \
 	  || gh release create $(TAG) $(DIST)/$(PKGNAME).zip \
-	       --title "go-safemedia $(TAG)" --generate-notes
+	       --title "go-safemedia $(TAG)" \
+	       $(if $(NOTES),--notes-file $(NOTES),--generate-notes)
 	@echo "▶ 已发布 $(TAG)"
 
 clean:
