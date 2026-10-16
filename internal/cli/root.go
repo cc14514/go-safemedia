@@ -62,7 +62,12 @@ func newRootCmd() *cobra.Command {
 		Long:          "go-safemedia 把视频封存为 .svid 密档（AES-256-GCM 分块加密），只有持有账户私钥的人能启封播放。完全离线运行。",
 		SilenceUsage:  true,
 		SilenceErrors: true,
+		// 让 `safemedia --version` 与 `safemedia version` 输出一致（cobra 默认会打印 "safemedia version x"）。
+		Version: version.String(),
 	}
+	root.SetVersionTemplate("{{.Version}}\n")
+	// 自己登记 --version（cobra 只在没有同名 flag 时才加它，且默认说明是英文的 "version for safemedia"）。
+	root.Flags().BoolP("version", "v", false, "打印版本信息")
 	root.PersistentFlags().StringVar(&flagAccountPath, "account", "",
 		"账户 keystore 路径（默认 ~/.safemedia/keystore.json）")
 	root.AddCommand(newAccountCmd())

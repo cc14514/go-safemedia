@@ -1,6 +1,6 @@
 # go-safemedia 使用手册
 
-版本 `v0.1.0-dev` · 密档格式 `.svid` v1 · 适用平台 macOS / Linux / Windows
+版本 `0.2.0`（开发树标记为 `0.2.0-dev`）· 密档格式 `.svid` v1 · 适用平台 macOS / Linux / Windows
 
 本手册面向**使用者**：从安装、上手，到日常备份、搬运、恢复与排障。想了解内部设计与安全论证请看 `specs/001/plan.md` 与 `docs/requirements.md`。
 
@@ -76,7 +76,7 @@ mkdir -p ~/bin && cp bin/safemedia ~/bin/ && echo 'export PATH="$HOME/bin:$PATH"
 验证：
 
 ```sh
-safemedia version     # → go-safemedia 0.2.0-dev（发布包会显示注入的版本号，如 v0.2.0）
+safemedia version     # → go-safemedia 0.2.0-dev（发布包会显示注入的版本号，如 0.2.0；--version/-v 等价）
 safemedia --help
 ```
 
@@ -216,7 +216,7 @@ safemedia [command] [flags]
 safemedia --account ~/.safemedia/work.json account create
 ```
 
-命令总览：`account`（账户管理）、`seal`（封存）、`play`（启封播放）、`version`（版本）。
+命令总览：`account`（账户管理）、`seal`（封存）、`play`（启封播放）、`version` / `--version` / `-v`（版本）。
 
 ### 5.1 `account create` — 新建账户
 
@@ -402,7 +402,8 @@ safemedia play <密档文件> --player mpv
 ### 5.6 `version`
 
 ```sh
-safemedia version     # go-safemedia v0.1.0-dev
+safemedia version     # go-safemedia 0.2.0-dev
+safemedia --version   # 同上（-v 亦可）
 ```
 
 ---

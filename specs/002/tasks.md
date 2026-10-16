@@ -189,6 +189,13 @@
 - [x] T12.5 验证：`.icns` 含 10 个尺寸、`codesign --verify --deep --strict` 通过；**变异验证** —— 换成灰阶图标 → T12.1 判红；最近邻 32px 与本仓库 sips 32px 的图像对比（人眼核对）。
 - [x] T12.6 文档：`specs/002/*`（AC5.6 + 本段）、`AGENTS.md`（易错点 12 + 结构 + 命令）。
 
+## M13 · 发版后跟进（跑真实产物发现的文档/命令不一致）
+
+> 来源：v0.2.0 发布后我按用户的方式解压发行包、跑包里的二进制核对，发现 `safemedia --version` 报 `unknown flag` —— 规格 AC5.3 写的是 `--version`，实现的只有 `version` 子命令（手册写对了，规格写偏了）。修法是让两种写法都可用（更符合直觉），并把规格/手册的措辞与实际对齐。
+
+- [x] T13.1 （测试先行）`internal/cli/version_test.go` 增 `TestVersionFlagMatchesSubcommand`：`--version`、`-v`、`version` 三者输出逐字一致；`root.Version` + `SetVersionTemplate` + 自登记中文说明的 `-v/--version`（cobra 只在没有同名 flag 时才加它，默认说明是英文）。门禁实测：`--version`/`-v`/`version` 均打印 `go-safemedia <注入值>`。
+- [x] T13.2 文档一致性：`specs/002/spec.md` AC5.3 与 L1/L2 行按实际改写（L2 行不再声称覆盖版本注入）；`docs/manual.md` 清掉过期的 `v0.1.0-dev`/`v0.2.0` 示例并补 `--version`。
+
 ## 收尾
 
 - [x] T6.1 `make test`（L1+L2）全绿（含 `-race`）。
