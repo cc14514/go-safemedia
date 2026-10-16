@@ -34,7 +34,7 @@ func TestBuildEngineUsesLibraryModeForFileTarget(t *testing.T) {
 		Kind:    desktopcfg.KindFile,
 		Path:    clip,
 		Account: filepath.Join(home, "keystore.json"),
-	}, home, desktopcfg.Config{})
+	}, home, desktopcfg.Config{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,7 +216,7 @@ func TestDesktopAccountWiring(t *testing.T) {
 	}
 	eng, _, err := buildEngine(desktopcfg.Target{
 		Kind: desktopcfg.KindLibrary, Path: libDir, Account: mainKs,
-	}, home, desktopcfg.Config{})
+	}, home, desktopcfg.Config{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -282,7 +282,7 @@ func TestDesktopLoginWithoutAnyAccount(t *testing.T) {
 
 	eng, _, err := buildEngine(desktopcfg.Target{
 		Kind: desktopcfg.KindLibrary, Path: libDir, Account: missing,
-	}, home, desktopcfg.Config{})
+	}, home, desktopcfg.Config{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -365,7 +365,7 @@ func TestDesktopAccountManagementEndToEnd(t *testing.T) {
 	mainKs := filepath.Join(desktopcfg.DefaultDir(home), "keystore.json")
 	cfg := desktopcfg.Config{Account: mainKs}
 
-	eng, _, err := buildEngine(desktopcfg.Target{Kind: desktopcfg.KindLibrary, Path: libDir}, home, cfg)
+	eng, _, err := buildEngine(desktopcfg.Target{Kind: desktopcfg.KindLibrary, Path: libDir}, home, cfg, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

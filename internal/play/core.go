@@ -56,6 +56,7 @@ type coreConfig struct {
 	onSealDone     func()                     // 队列结束后重扫库根
 	sealDefaultOut func() string              // 默认输出目录（库根）
 	dropToken      string                     // 拖放投递 token（随机）
+	picker         FilePicker                 // 系统原生选择对话框（US11；CLI 不注入）
 }
 
 // core 是单文件模式与目录模式共用的生命周期：监听、门控、空闲监控、锁定。
@@ -87,6 +88,7 @@ type core struct {
 	queue       SealQueue
 	sealRejects []sealReject
 	sealOut     string
+	sealErr     string // 与条目无关的失败（US11：选择对话框打不开等）
 
 	// 封存依赖（构造后只读）：sealer 为空表示当前模式不支持封存。
 	sealer         SealFactory
@@ -94,6 +96,7 @@ type core struct {
 	onSealDone     func()
 	sealDefaultOut func() string
 	dropToken      string
+	picker         FilePicker // US11：系统原生选择对话框（nil = 面板不渲染选择按钮）
 
 	last     atomic.Int64 // 最近一次请求时间（UnixNano）
 	locked   atomic.Bool  // 密钥已清零（需要再次解锁）
@@ -132,6 +135,7 @@ func newCore(cfg coreConfig) *core {
 		onSealDone:     cfg.onSealDone,
 		sealDefaultOut: cfg.sealDefaultOut,
 		dropToken:      cfg.dropToken,
+		picker:         cfg.picker,
 	}
 	c.unlocked.Store(cfg.preUnlocked)
 	c.locked.Store(!cfg.preUnlocked)

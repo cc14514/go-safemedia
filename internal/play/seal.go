@@ -24,6 +24,18 @@ type SealQueue interface {
 // （返回时队列必须已在运行；pub 是解锁账户的公钥）。返回 nil 表示无法启动。
 type SealFactory func(jobs []seal.Job, pub *ecdsa.PublicKey) SealQueue
 
+// FilePicker 由调用方提供系统原生的选择对话框（US11）：桌面外壳用 Wails 的
+// OpenMultipleFilesDialog / OpenDirectoryDialog 实现；CLI 与测试不注入。
+//
+// 约定：**用户取消选择**返回 (nil, nil) / ("", nil)——引擎据此保持状态不变（AC11.4）；
+// 只有对话框本身失败才返回 error。选择器只回**路径**，不经过 webview 传内容（AC11.6）。
+//
+// 它是拖放的**等价保底路径**：不依赖任何系统拖放能力（AC11.9/FR-6.17）。
+type FilePicker interface {
+	PickFiles() ([]string, error)
+	PickFolder() (string, error)
+}
+
 // sealReject 是一条未封存的输入（供面板逐条展示原因）。
 type sealReject struct {
 	Path   string `json:"path"`
@@ -48,6 +60,8 @@ type sealStatus struct {
 	Items   []sealItemJSON `json:"items"`
 	Rejects []sealReject   `json:"rejects"`
 	Summary string         `json:"summary"`
+	// Error 是「与条目无关」的失败（例如选择对话框打不开，AC11.8）。
+	Error string `json:"error"`
 }
 
 // sealAvailable 表示当前模式支持封存（库模式注入 Sealer 后为真）。
@@ -104,6 +118,7 @@ func (c *core) sealStatusNow() sealStatus {
 	c.sealMu.Lock()
 	q := c.queue
 	st.Rejects = append(st.Rejects, c.sealRejects...)
+	st.Error = c.sealErr
 	c.sealMu.Unlock()
 
 	if q == nil {
@@ -113,18 +128,26 @@ func (c *core) sealStatusNow() sealStatus {
 	items := q.Items()
 	st.Items = make([]sealItemJSON, 0, len(items))
 	for _, it := range items {
-		st.Items = append(st.Items, sealItemJSON{
+		item := sealItemJSON{
 			Name:    baseName(it.Src),
 			Src:     it.Src,
 			State:   it.State.Label(),
 			Percent: it.Percent(),
-			Done:    humanBytes(it.Done),
-			Total:   humanBytes(it.Total),
 			Reason:  it.Reason,
-		})
+		}
+		// 未开始的条目（跳过/待封存）大小无意义，不渲染「0 B / 0 B」这种噪音（AC10.5）。
+		if it.Total > 0 {
+			item.Done = humanBytes(it.Done)
+			item.Total = humanBytes(it.Total)
+		}
+		st.Items = append(st.Items, item)
 	}
 	done, failed, skipped, canceled := q.Summary()
-	parts := []string{fmt.Sprintf("完成 %d", done)}
+	// 只列非零计数；全为 0（队列还没出结果）时退化为总数，免得出现「完成 0 · 取消 0」。
+	parts := make([]string, 0, 4)
+	if done > 0 {
+		parts = append(parts, fmt.Sprintf("完成 %d", done))
+	}
 	if failed > 0 {
 		parts = append(parts, fmt.Sprintf("失败 %d", failed))
 	}
@@ -133,6 +156,9 @@ func (c *core) sealStatusNow() sealStatus {
 	}
 	if canceled > 0 {
 		parts = append(parts, fmt.Sprintf("已取消 %d", canceled))
+	}
+	if len(parts) == 0 {
+		parts = append(parts, fmt.Sprintf("共 %d 个文件", len(st.Items)))
 	}
 	st.Summary = strings.Join(parts, " · ")
 	return st
@@ -167,6 +193,28 @@ func (c *core) handleDrop(w http.ResponseWriter, r *http.Request) {
 	}
 
 	c.touch()
+	res := c.startSealFromPaths(paths)
+	c.touch()
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"jobs":    res.Started,
+		"skipped": res.Skipped,
+		"rejects": len(res.Rejects),
+	})
+}
+
+// sealStart 是一次「展开 + 入队」的结果。
+type sealStart struct {
+	Started int
+	Skipped int
+	Rejects []seal.Reject
+}
+
+// startSealFromPaths 是拖放投递与页内选取**共用**的入口（AC11.6）：
+// 展开输入 → 记录逐条拒绝原因 → 启动队列 → 清掉上一次的错误提示。
+func (c *core) startSealFromPaths(paths []string) sealStart {
 	out := c.sealOutputDir()
 	res, _ := seal.Collect(paths, out) // 致命输入错误由 rejects 逐条呈现（AC10.4）
 
@@ -175,6 +223,7 @@ func (c *core) handleDrop(w http.ResponseWriter, r *http.Request) {
 	for _, rj := range res.Rejects {
 		c.sealRejects = append(c.sealRejects, sealReject{Path: baseName(rj.Path), Reason: rj.Reason})
 	}
+	c.sealErr = ""
 	c.sealMu.Unlock()
 
 	started := 0
@@ -183,15 +232,74 @@ func (c *core) handleDrop(w http.ResponseWriter, r *http.Request) {
 			started = len(res.Jobs)
 		}
 	}
-	c.touch()
+	return sealStart{Started: started, Skipped: res.Skipped, Rejects: res.Rejects}
+}
 
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"jobs":    started,
-		"skipped": res.Skipped,
-		"rejects": len(res.Rejects),
-	})
+// setSealError 记录一条与条目无关的错误（选择对话框失败等，AC11.8）。
+func (c *core) setSealError(msg string) {
+	c.sealMu.Lock()
+	c.sealErr = msg
+	c.sealMu.Unlock()
+}
+
+// handleSealPickFiles 处理面板上的「选择视频文件…」（US11）：系统原生多选对话框。
+//
+// 与拖放走同一条管线（startSealFromPaths）；用户取消 → 仅回到面板、**不改变任何状态**（AC11.4）。
+func (c *core) handleSealPickFiles(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "只接受 POST", http.StatusMethodNotAllowed)
+		return
+	}
+	if !c.unlocked.Load() { // gate 已挡；这里只为「绝不封存」再明确一次（AC11.7）
+		writeJSONError(w, http.StatusConflict, "请先解锁后再选择视频")
+		return
+	}
+	if c.picker == nil {
+		c.setSealError("当前模式不支持选择文件")
+		http.Redirect(w, r, "/seal", http.StatusSeeOther)
+		return
+	}
+	c.touch()
+	paths, err := c.picker.PickFiles()
+	if err != nil {
+		c.setSealError("打开文件选择框失败：" + err.Error())
+		http.Redirect(w, r, "/seal", http.StatusSeeOther)
+		return
+	}
+	if len(paths) > 0 { // 空 = 用户取消 → 状态不变（AC11.4）
+		c.startSealFromPaths(paths)
+	}
+	c.touch()
+	http.Redirect(w, r, "/seal", http.StatusSeeOther)
+}
+
+// handleSealPickFolder 处理「选择文件夹…」（US11）：系统原生目录对话框。
+func (c *core) handleSealPickFolder(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "只接受 POST", http.StatusMethodNotAllowed)
+		return
+	}
+	if !c.unlocked.Load() {
+		writeJSONError(w, http.StatusConflict, "请先解锁后再选择文件夹")
+		return
+	}
+	if c.picker == nil {
+		c.setSealError("当前模式不支持选择文件夹")
+		http.Redirect(w, r, "/seal", http.StatusSeeOther)
+		return
+	}
+	c.touch()
+	dir, err := c.picker.PickFolder()
+	if err != nil {
+		c.setSealError("打开文件夹选择框失败：" + err.Error())
+		http.Redirect(w, r, "/seal", http.StatusSeeOther)
+		return
+	}
+	if dir != "" { // 空 = 用户取消 → 状态不变（AC11.4）
+		c.startSealFromPaths([]string{dir})
+	}
+	c.touch()
+	http.Redirect(w, r, "/seal", http.StatusSeeOther)
 }
 
 // startSeal 构造并启动队列；返回 nil 表示无法启动（未解锁/无公钥）。
@@ -225,7 +333,7 @@ func (c *core) handleSeal(w http.ResponseWriter, r *http.Request) {
 	}
 	writeNoCacheHeaders(w)
 	st := c.sealStatusNow()
-	v := sealPanelView{Target: c.target, Status: st}
+	v := sealPanelView{Target: c.target, Status: st, HasPicker: c.picker != nil}
 	page := sealPanelPage(v)
 	if page == "" {
 		return

@@ -25,6 +25,8 @@ type fakeQueue struct {
 	canceled atomic.Bool
 	done     chan struct{}
 	once     sync.Once
+	// itemsOverride 非空时替代默认进度（用于断言跳过/失败条目的呈现）。
+	itemsOverride []seal.Item
 }
 
 func newFakeQueue(jobs []seal.Job) *fakeQueue {
@@ -34,6 +36,9 @@ func newFakeQueue(jobs []seal.Job) *fakeQueue {
 }
 
 func (q *fakeQueue) Items() []seal.Item {
+	if q.itemsOverride != nil {
+		return append([]seal.Item(nil), q.itemsOverride...)
+	}
 	items := make([]seal.Item, 0, len(q.jobs))
 	for _, j := range q.jobs {
 		items = append(items, seal.Item{
@@ -88,6 +93,17 @@ func (h *sealHarness) jobsSnapshot() []seal.Job {
 // priv 为 nil 时以「锁定态」启动（用 Unlock 回调模拟桌面外壳）。
 func testLibraryWithSealer(t *testing.T, priv *ecdsa.PrivateKey, idle time.Duration) *sealHarness {
 	t.Helper()
+	return newSealHarness(t, priv, idle, nil)
+}
+
+// testLibraryWithPicker 同上，但额外注入选择器（US11）。
+func testLibraryWithPicker(t *testing.T, priv *ecdsa.PrivateKey, picker play.FilePicker) *sealHarness {
+	t.Helper()
+	return newSealHarness(t, priv, play.DefaultIdleTimeout, picker)
+}
+
+func newSealHarness(t *testing.T, priv *ecdsa.PrivateKey, idle time.Duration, picker play.FilePicker) *sealHarness {
+	t.Helper()
 	dir := t.TempDir()
 	h := &sealHarness{}
 	entries := []play.Entry{{Rel: "a.mp4.svid", Name: "a.mp4.svid", Size: 10, Path: filepath.Join(dir, "a.mp4.svid")}}
@@ -97,6 +113,7 @@ func testLibraryWithSealer(t *testing.T, priv *ecdsa.PrivateKey, idle time.Durat
 		Target:      dir,
 		Root:        dir,
 		IdleTimeout: idle,
+		Picker:      picker,
 		Sealer: func(jobs []seal.Job, pub *ecdsa.PublicKey) play.SealQueue {
 			if pub == nil {
 				return nil

@@ -23,6 +23,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -61,17 +62,32 @@ type engine interface {
 
 // App 是暴露给 Wails 的最小宿主对象；窗口关闭时负责清零密钥。
 type App struct {
+	// ctxMu 保护窗口上下文：startup 在 UI 线程写入，选择器/对话框在 HTTP handler
+	// 的 goroutine 上读取（US11 起需要，之前只在 startup 回调里用）。
+	ctxMu  sync.RWMutex
 	ctx    context.Context
 	engine engine
 }
 
 func (a *App) startup(ctx context.Context) {
+	a.ctxMu.Lock()
 	a.ctx = ctx
+	a.ctxMu.Unlock()
 	// 原生拖放：窗口里丢进视频/文件夹即交给引擎封存（US10.6）。
 	// 必须在窗口就绪后注册；回调里只做 HTTP 投递，不阻塞 UI 线程。
-	runtime.OnFileDrop(ctx, func(_, _ int, paths []string) {
+	runtime.OnFileDrop(ctx, func(x, y int, paths []string) {
+		// 每个事件写一行日志：真实运行时据此判定「拖放到底有没有到达进程」
+		// （US11 的诊断手段；不进页面、不含口令）。
+		fmt.Fprintf(os.Stderr, "[safemedia] 收到拖放：x=%d y=%d 路径=%d 条\n", x, y, len(paths))
 		go a.dropPaths(paths)
 	})
+}
+
+// windowCtx 取窗口上下文（可能为 nil：单元测试不跑 startup）。
+func (a *App) windowCtx() context.Context {
+	a.ctxMu.RLock()
+	defer a.ctxMu.RUnlock()
+	return a.ctx
 }
 
 // dropPaths 把拖入的绝对路径投递给引擎的随机投递地址（AC10.6/AC10.7）。
@@ -103,8 +119,8 @@ func (a *App) dropPaths(paths []string) {
 	switch resp.StatusCode {
 	case http.StatusOK:
 		// 切到封存面板；无窗口上下文（测试）时跳过。
-		if a.ctx != nil {
-			runtime.WindowExecJS(a.ctx, "window.location.replace('/seal')")
+		if ctx := a.windowCtx(); ctx != nil {
+			runtime.WindowExecJS(ctx, "window.location.replace('/seal')")
 		}
 	case http.StatusConflict, http.StatusForbidden, http.StatusBadRequest:
 		var e struct {
@@ -122,11 +138,12 @@ func (a *App) dropPaths(paths []string) {
 
 // alert 弹一个原生对话框（拖放失败路径；页面内不显示技术细节）。
 func (a *App) alert(title, msg string) {
-	if a.ctx == nil {
+	ctx := a.windowCtx()
+	if ctx == nil {
 		fmt.Fprintf(os.Stderr, "[safemedia] %s: %s\n", title, msg)
 		return
 	}
-	_, _ = runtime.MessageDialog(a.ctx, runtime.MessageDialogOptions{
+	_, _ = runtime.MessageDialog(ctx, runtime.MessageDialogOptions{
 		Type:    runtime.ErrorDialog,
 		Title:   title,
 		Message: msg,
@@ -180,8 +197,11 @@ func main() {
 		OnShutdown:       app.shutdown,
 		DragAndDrop: &options.DragAndDrop{
 			// 原生拖放：拿到的路径交给引擎封存（US10）。
-			// webview 自身的 HTML5 拖放保持启用，两者互不冲突。
-			EnableFileDrop: true,
+			// **必须同时关掉 webview 自身的文件拖放**（US11 修复的关键）：Wails 的
+			// WebView 只有在 DisableWebViewDrop=true 时才无条件接管拖放；否则是否放行
+			// 「取决于 webpage 行为」（框架源码原话），实测表现为拖入被吞掉、什么也不发生。
+			EnableFileDrop:     true,
+			DisableWebViewDrop: true,
 		},
 		Bind: []interface{}{app},
 	}); err != nil {
@@ -201,7 +221,7 @@ func prepare(app *App, home string) (url, label string, err error) {
 	if err != nil {
 		return "", "", err
 	}
-	eng, label, err := buildEngine(target, home, cfg)
+	eng, label, err := buildEngine(target, home, cfg, &sealPicker{app: app})
 	if err != nil {
 		return "", "", err
 	}
@@ -236,7 +256,7 @@ func appArgs() []string {
 // buildEngine 以「库模式」构造引擎（US7 / AC7.7）：目录目标直接用其路径，
 // 单密档目标取其所在目录——这样目录选择器与目录树在任何启动方式下都可用。
 // 引擎以锁定态启动：先出登录页，解锁后才解密。
-func buildEngine(target desktopcfg.Target, home string, cfg desktopcfg.Config) (engine, string, error) {
+func buildEngine(target desktopcfg.Target, home string, cfg desktopcfg.Config, picker play.FilePicker) (engine, string, error) {
 	root := target.Path
 	if target.Kind == desktopcfg.KindFile {
 		root = filepath.Dir(target.Path)
@@ -258,6 +278,7 @@ func buildEngine(target desktopcfg.Target, home string, cfg desktopcfg.Config) (
 		IdleTimeout:   play.DefaultIdleTimeout,
 		SoftLock:      true,        // 锁定后回到登录页，而不是关停（AC3.1/AC3.2）
 		Sealer:        newSealer(), // 拖入视频即封存（US10）
+		Picker:        picker,      // 「选择视频文件…／选择文件夹…」（US11）
 		Unlock: func(accountID, password string) (*ecdsa.PrivateKey, error) {
 			// 二次校验：即便引擎侧校验被绕过，也不按任意路径加载 keystore（AC8.7）。
 			discovered := desktopcfg.ListAccounts(home, cfg)

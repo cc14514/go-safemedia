@@ -261,6 +261,28 @@ type AccountsAdmin interface {
 
 **风险**：R9 未解锁时拖入易困惑 → 外壳据 409 弹原生提示；R10 封存与重扫并发 → 重扫只在队列结束后触发一次。
 
+## 18. 页内选取待封存输入（US11：不依赖系统拖放的保底路径 + 拖放修复）
+
+**缺陷记录（2026-10-16 用户反馈）**：真实 `.app` 中把文件拖到窗口上「无法完成封存操作」，且**没有任何可见提示**。读 Wails v2.16 源码（`internal/frontend/desktop/darwin/WailsWebView.m`）得到机制：`EnableFileDrop` 派生的原生拖放**是否放行取决于 webview 自身判断**——未关 `DisableWebViewDrop` 时，`draggingEntered/draggingUpdated` 是 `return [super …]`（源码注释原文：「As we want to ignore webkit behaviours that depends on webpage」——即不关就**由 webpage 行为决定**）；关闭后框架无条件接管（返回 `NSDragOperationGeneric`）。故根因是「原生拖放放行与否被 webview 的页面行为决定」，而我们无法据此稳定控制，表现为拖入被吞掉（也可能被 webview 当成导航）。**修复**：外壳设 `DisableWebViewDrop: true`，并在引擎页面根元素声明 `--wails-drop-target: drop`（Wails 文档要求的拖放目标标记，双保险）。**验证边界**：真实拖拽需要人手，自动化只能覆盖「原生回调 → 投递 → 队列 → 进度」这一段；因此 US11 同时提供**不依赖拖放**的选择入口作为保底路径（AC11.9）。
+
+**选择器接口（引擎侧只定义，外壳注入）**：
+```go
+// internal/play/seal.go
+type FilePicker interface {
+	PickFiles() ([]string, error)  // 系统原生多选对话框；取消 → (nil, nil)
+	PickFolder() (string, error)   // 系统原生目录对话框；取消 → ("", nil)
+}
+```
+`Options.Picker` / `LibraryOptions.Picker` 注入；为 nil 时面板**不渲染**两个按钮（AC11.5，CLI/测试形态）。外壳用 `runtime.OpenMultipleFilesDialog` / `runtime.OpenDirectoryDialog`（macOS 侧 `ON_MAIN_THREAD` 派发 + 通道回传，**从 HTTP handler 的 goroutine 调用是安全的**——已读 `Application.m`/`dialog.go` 确认；`dialogLock` 串行化多个对话框）。
+
+**管线复用（AC11.6）**：新增路由 `POST /seal/pick/files`、`POST /seal/pick/folder`，与 `/drop/<token>` 共用同一个内部函数 `startSealFromPaths(paths)`（`internal/seal.Collect` → 设置拒绝列表 → `startSeal` → 303 `/seal`）；`/drop` 回 JSON、pick 回 303，仅响应形态不同。**取消**（AC11.4）：选择器返回空 → 只 303 回 `/seal`，**不 touch 任何状态**（不清进度、不清拒绝列表、不启动空队列）。
+
+**错误可见（AC11.8）**：新增 `sealStatus.Error`（面板警示框）+ 核心状态字段；选择器自身报错时写入，队列照常。
+
+**拖放诊断（AC11.9）**：外壳收到的每个拖放事件写一行进程日志（`log.Printf`，不进页面、不含口令），使「拖放有没有到达进程」在真实运行中可判定。
+
+**风险**：R11 引擎 HTTP handler 阻塞在对话框上一段时间（用户慢慢选文件）→ 该 handler 是独立 goroutine，且 `/seal/status` 轮询不受影响（已用假选择器 + 真轮询在 L2 覆盖）；R12 对话框返回的是**路径**，与拖入同源，明文不因此进入 webview（AC11.6/AC10.8 不变）。
+
 ## 15. 评审门
 
 - [x] 确认引擎三态生命周期与 `SoftLock` 语义（CLI 保持关停，外壳软锁定回登录页）——已实现并过 L1/L2（参数名以实现为准，见 `tasks.md` 对齐记录）

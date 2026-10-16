@@ -14,6 +14,9 @@ import (
 //	· 输入框：深色内嵌底 + 焦点环；跟随系统深色外观（color-scheme: dark）。
 const baseCSS = `{{define "baseCSS"}}
   :root { color-scheme: dark;
+    /* 声明「本页面接受文件拖放」：Wails 的拖放目标标记（原生拖放是否放行不取决于页面行为，
+       但这是 Wails 文档要求的标记；US11 修复拖入被 webview 吞掉的问题，见易错点 10）。 */
+    --wails-drop-target: drop;
     --bg:#1b1b1d; --bg-side:#151517; --panel:#212123; --field:#101012;
     --line:#333336; --line-soft:#2a2a2c; --text:#e9e9ec; --dim:#9b9ba1;
     --accent:#3f7a34; --accent-hi:#4a8f3e; --accent-text:#e8f7e2;
@@ -848,8 +851,10 @@ const sealCSS = `{{define "sealCSS"}}
   .bar i { display:block; height:100%; width:0; background:#3f9f5f; border-radius:3px; transition:width .35s ease; }
   .bar.wait i { background:#6a6a72; }
   .reason { color:#ffb0b0; font-size:12px; margin-top:5px; word-break:break-all; }
-  .warn { margin:0 0 14px; background:#3a2f16; border:1px solid #7a6224; color:#ffd894;
-          padding:10px 12px; border-radius:8px; font-size:13px; }
+  .warn { margin:0 0 12px; background:#332a14; border:1px solid #6b5620; color:#f0cd8a;
+          padding:7px 11px; border-radius:7px; font-size:12.5px; line-height:1.5; }
+  /* 工具栏里的提交按钮：让 form 不生成盒子，按钮直接当 flex 项（与 a.btn 同排）。 */
+  header.toolbar form { display:contents; }
   .spin { display:inline-block; width:9px; height:9px; border-radius:50%; background:#3f9f5f; margin-right:6px; }
 {{end}}`
 
@@ -878,15 +883,18 @@ const sealSrc = `{{define "seal"}}<!doctype html>
   <div class="tbwrap">
     <h1>封存视频</h1>
     <span class="grow"></span>
+    {{if .HasPicker}}<form method="post" action="/seal/pick/files"><button type="submit">选择视频文件…</button></form>
+    <form method="post" action="/seal/pick/folder"><button type="submit">选择文件夹…</button></form>{{end}}
     <a class="btn" href="/library?purpose=seal">更改输出目录…</a>
     <a class="btn" href="/">← 返回密档库</a>
   </div>
 </header>
 <main>
   <p class="sub">输出目录：<code id="out">{{.Status.Output}}</code></p>
+  <div id="err"></div>
   <div id="rejects"></div>
   <ul class="jobs" id="jobs"></ul>
-  <div class="empty" id="empty">把视频文件或文件夹拖到窗口上即可开始封存。</div>
+  <div class="empty" id="empty">{{if .HasPicker}}点上方「选择视频文件…／选择文件夹…」开始封存（也可以把文件或文件夹拖到窗口上）。{{else}}把视频文件或文件夹拖到窗口上即可开始封存。{{end}}</div>
   <p class="summary" id="summary"></p>
   <div class="actions" id="actions">
     <form method="post" action="/seal/cancel"><button type="submit">取消封存</button></form>
@@ -901,6 +909,7 @@ const jobs = document.getElementById('jobs');
 const empty = document.getElementById('empty');
 const summary = document.getElementById('summary');
 const rejects = document.getElementById('rejects');
+const errEl = document.getElementById('err');
 const outEl = document.getElementById('out');
 const actions = document.getElementById('actions');
 
@@ -910,6 +919,7 @@ function esc(s) {
 
 function render(d) {
   if (d.output) outEl.textContent = d.output;
+  errEl.innerHTML = d.error ? '<div class="warn">' + esc(d.error) + '</div>' : '';
   if (d.rejects && d.rejects.length) {
     rejects.innerHTML = '<div class="warn">' + d.rejects.map(r =>
       esc(r.path) + '：' + esc(r.reason)).join('<br>') + '</div>';
@@ -951,6 +961,8 @@ async function tick() {
 type sealPanelView struct {
 	Target string
 	Status sealStatus
+	// HasPicker 为真时渲染「选择视频文件…／选择文件夹…」按钮（US11，由外壳注入选择器）。
+	HasPicker bool
 }
 
 // sealPanelPage 渲染封存面板（模板执行失败必须可见，不得静默截断）。

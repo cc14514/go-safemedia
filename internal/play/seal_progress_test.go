@@ -8,7 +8,72 @@ import (
 	"testing"
 
 	"github.com/cc14514/go-safemedia/internal/play"
+	"github.com/cc14514/go-safemedia/internal/seal"
 )
+
+// T10.8（AC10.5）：进度面板不出现「0 B / 0 B」这类噪音，汇总也不列零计数。
+//
+// 跳过的条目没有大小可言（Total=0），此时应只显示状态与原因；
+// 汇总若把「完成 0 · 取消 0」都列出来，反而看不出重点。
+func TestSealStatusOmitsEmptySizesAndZeroCounts(t *testing.T) {
+	priv := newKey(t)
+	h := testLibraryWithSealer(t, priv, play.DefaultIdleTimeout)
+	lib := h.lib
+
+	video := filepath.Join(t.TempDir(), "clip.mp4")
+	writeTestFile(t, video, "mp4")
+	if code, body := postJSON(t, lib.DropURL(), []string{video}); code != http.StatusOK {
+		t.Fatalf("投递应成功，得到 %d（%s）", code, body)
+	}
+	q := h.queue()
+	if q == nil {
+		t.Fatal("应创建队列")
+	}
+	jobs := h.jobsSnapshot()
+	if len(jobs) != 1 {
+		t.Fatalf("应有 1 个任务：%+v", jobs)
+	}
+	// 造一个「已跳过」的条目（Total=0，语义同「目标密档已存在」）。
+	q.itemsOverride = []seal.Item{{
+		Src: jobs[0].Src, Dst: jobs[0].Dst,
+		State: seal.StateSkipped, Total: 0, Done: 0, Reason: "已存在（跳过）",
+	}}
+
+	code, body := getStringStatus(t, lib.URL()+"seal/status")
+	if code != http.StatusOK {
+		t.Fatalf("状态接口应 200，得到 %d", code)
+	}
+	var st struct {
+		Summary string `json:"summary"`
+		Items   []struct {
+			State  string `json:"state"`
+			Done   string `json:"done"`
+			Total  string `json:"total"`
+			Reason string `json:"reason"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(body), &st); err != nil {
+		t.Fatalf("状态不是 JSON: %v（%s）", err, body)
+	}
+	if len(st.Items) != 1 {
+		t.Fatalf("应有 1 个条目：%s", body)
+	}
+	it := st.Items[0]
+	if it.Done != "" || it.Total != "" {
+		t.Fatalf("跳过的条目不应报告大小，得到 done=%q total=%q", it.Done, it.Total)
+	}
+	if it.Reason == "" {
+		t.Fatalf("跳过的条目必须给出原因：%s", body)
+	}
+	if strings.Contains(st.Summary, "完成 0") || strings.Contains(st.Summary, "取消 0") ||
+		strings.Contains(st.Summary, "已取消 0") {
+		t.Fatalf("汇总不应列出零计数，得到 %q", st.Summary)
+	}
+	// 面板首屏同样不能出现 0 B 噪音（服务端渲染，AC10.5）。
+	if html := getString(t, lib.URL()+"seal"); strings.Contains(html, "0 B / 0 B") {
+		t.Fatalf("面板首屏出现了「0 B / 0 B」噪音：%s", head(html))
+	}
+}
 
 // T10.7（AC10.3）：进度必须是**实时**的 —— 队列没结束、条目还在封存中时，
 // `/seal/status` 就要报出中间进度，面板首屏也必须already显示它（不是等结束一次性出现）。

@@ -35,6 +35,20 @@ func styleFixturePages() map[string]string {
 				Summary: "1 个文件",
 			},
 		}),
+		// US11：注入选择器后的封存面板（多两个按钮，外观同样必须是桌面应用）。
+		"seal-pick": sealPanelPage(sealPanelView{
+			HasPicker: true,
+			Status: sealStatus{
+				Active: true,
+				Output: "/lib",
+				Items: []sealItemJSON{{
+					Name: "clip.mp4", State: "封存中", Percent: 42,
+					Done: "4.2 MiB", Total: "10.0 MiB",
+				}},
+				Rejects: []sealReject{{Path: "notes.txt", Reason: "不支持的容器格式（仅支持 mp4 / webm / mov）"}},
+				Summary: "1 个文件",
+			},
+		}),
 		"login": loginPage(loginView{Target: "/lib", Accounts: []AccountOption{
 			{ID: "/home/u/.safemedia/keystore.json", Label: "keystore.json", Note: "0x1a2b…9f8e"},
 			{ID: "/home/u/.safemedia/accounts/work.json", Label: "work.json", Note: "0x9ed7…da40"},
@@ -159,6 +173,27 @@ func pageSources() map[string]string {
 		"mnemonic": mnemonicSrc,
 		"recover":  recoverSrc,
 		"delete":   deleteSrc,
+		"seal":     sealSrc,
+	}
+}
+
+// T11.8（AC11.8）：引擎每个页面都声明 Wails 的拖放目标标记 `--wails-drop-target: drop`。
+//
+// 背景：Wails 的原生拖放是否放行由 webview 的页面行为决定（未关 DisableWebViewDrop 时），
+// 实测表现为「拖到窗口上什么也不发生」。外壳侧关掉 webview 拖放 + 页面声明该标记是双保险；
+// 标记来自共享的 baseCSS，任何页面都不许丢（否则拖放可能只在一部分页面可用）。
+func TestPagesDeclareWailsDropTarget(t *testing.T) {
+	if !strings.Contains(baseCSS, "--wails-drop-target: drop") {
+		t.Fatalf("baseCSS 未声明 Wails 拖放目标标记（US11）:\n%s", baseCSS)
+	}
+	for name, html := range styleFixturePages() {
+		if !strings.Contains(html, "--wails-drop-target: drop") {
+			t.Fatalf("%s 页缺少拖放目标标记（拖放会依赖 webview 的页面行为而不稳定）", name)
+		}
+	}
+	// 声明必须落在 :root（自定义属性靠继承生效；放在某个具体元素上会漏掉其它页面结构）。
+	if !regexp.MustCompile(`:root\s*\{[^}]*--wails-drop-target`).MatchString(baseCSS) {
+		t.Fatalf("拖放目标标记应在 :root 上声明:\n%s", baseCSS)
 	}
 }
 

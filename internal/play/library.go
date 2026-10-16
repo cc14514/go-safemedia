@@ -136,6 +136,10 @@ type LibraryOptions struct {
 	// Sealer 启用封存（US10）：为 nil 表示不支持（CLI 形态，封存仍走命令行）。
 	// 由外壳注入队列实现；引擎自身不 import internal/seal 的队列。
 	Sealer SealFactory
+
+	// Picker 提供系统原生的「选择视频文件…/选择文件夹…」对话框（US11）。
+	// 为 nil 时封存面板不渲染这两个按钮；由外壳注入（引擎不 import Wails）。
+	Picker FilePicker
 }
 
 // Library 是目录（多密档）播放服务。
@@ -266,6 +270,7 @@ func NewLibrary(opts LibraryOptions) (*Library, error) {
 		onSealDone:     l.rescanAfterSeal,
 		sealDefaultOut: l.Root,
 		dropToken:      randomToken(),
+		picker:         opts.Picker,
 	})
 	l.tree = buildTree(l.order)
 
@@ -279,6 +284,8 @@ func NewLibrary(opts LibraryOptions) (*Library, error) {
 	mux.HandleFunc("/seal/status", l.core.handleSealStatus)
 	mux.HandleFunc("/seal/cancel", l.core.handleSealCancel)
 	mux.HandleFunc("/seal/output", l.core.handleSealOutput)
+	mux.HandleFunc("/seal/pick/files", l.core.handleSealPickFiles)
+	mux.HandleFunc("/seal/pick/folder", l.core.handleSealPickFolder)
 	mux.HandleFunc("/drop/", l.core.handleDrop)
 	mux.HandleFunc("/media/"+l.token+"/", l.handleMedia)
 	mux.HandleFunc("/lock", handleLockRequest(l.core))

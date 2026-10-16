@@ -163,6 +163,21 @@
 - 首屏状态注入方式：`<script>` 里直接注入 **JS 对象字面量**（`const boot = {{.Status}};`）。曾用 `<script type="application/json">` + `JSON.parse(textContent)` 失败——见 `AGENTS.md` 易错点 9；`zz_vis_dump`/L3 的浏览器用例钉住它。
 - `internal/vault` 新增 `SealFileContext` + `SealOptions{Overwrite}`（`ErrTargetExists`）；`SealFileWithProgress` 改为委托（默认覆盖），CLI 语义逐字不变（AC10.11）。
 
+## M11 · 页内选取待封存输入（US11，用户 2026-10-16 反馈后新增）
+
+> 反馈：「不行啊，拖到窗口上无法完成封存操作，你如果实现不了，改成点击选择文件或文件夹上传也行」。定位：Wails 未关 `DisableWebViewDrop` 时，原生拖放是否放行**由 webview 的页面行为决定**（源码注释原文），表现为拖入被吞掉。故本轮 = 修拖放（外壳关 `DisableWebViewDrop` + 页面声明 `--wails-drop-target: drop` + 事件日志）+ 增补**不依赖拖放**的系统原生选择入口（保底路径）。
+
+- [x] T11.1 （测试先行）引擎选择器接口：`FilePicker`（`PickFiles`/`PickFolder`，取消返回空且**不改状态**），`Options.Picker`/`LibraryOptions.Picker` 注入（AC11.5）。
+- [x] T11.2 （测试先行）`POST /seal/pick/files`、`POST /seal/pick/folder`：注入假选择器断言「选择 → 与投递等价的展开 → 入队 → 进度 → 完成后重扫」（AC11.1–11.3/11.6）。
+- [x] T11.3 （测试先行）取消语义：选择器返回空 → 303 回 `/seal` 且**不清空**既有进度与拒绝列表、不启动空队列（AC11.4）。
+- [x] T11.4 （测试先行）锁定态：`/seal/pick/*` 不封存任何文件（回登录页，0 写盘）；未注入选择器时面板不渲染两个按钮（AC11.5/11.7）。
+- [x] T11.5 （测试先行）选择器报错 → `sealStatus.Error` 呈现中文原因，已入队条目不受影响（AC11.8）。
+- [x] T11.6 引擎实现：路由 + 与 `/drop` 共用的 `startSealFromPaths`；面板工具栏两个按钮（`HasPicker` 控制）；警示框渲染 `Error`；空态文案补「或点上方选择…」（AC11.6/11.8）。
+- [x] T11.7 外壳修复：`DisableWebViewDrop: true`；`runtime.OnFileDrop` 事件写进程日志（诊断）；`picker` 适配器（`OpenMultipleFilesDialog` 过滤 mp4/mov/webm / `OpenDirectoryDialog`）经 `LibraryOptions.Picker` 注入；`App.ctx` 加锁存取（对话框需在 startup 之后调用）。
+- [x] T11.8 页面样式：引擎页面根元素加 `--wails-drop-target: drop`（Wails 拖放目标标记），`page_style_test.go` 钉住它存在。
+- [x] T11.9 （测试先行）L2 `tests/integration/seal_pick_test.go`：进程内真队列 + 假选择器，走「选取文件/文件夹 → 实时进度 → 完成 → 新密档可启封」全链路（与拖入同管线）。
+- [x] T11.10 文档：`docs/requirements.md`（FR-6.16/6.17）、`specs/002/*`（US11 + 计划 18 + 本段）、`README.md` / `docs/manual.md`（两种封存入口）、`CONTEXT.md`（术语「选择器（FilePicker）」）、`AGENTS.md`（US10/US11 要点 + 易错点 9/10/11）。
+
 ## 收尾
 
 - [x] T6.1 `make test`（L1+L2）全绿（含 `-race`）。

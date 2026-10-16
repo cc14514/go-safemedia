@@ -85,7 +85,8 @@ dist: desktop
 	  '首次使用：' \
 	  '  1) 双击 safemedia.app，点「账户管理 → 创建账户」（当场显示助记词，请离线抄写）' \
 	  '     —— 也可以终端执行：./safemedia account create' \
-	  '  2) 封存视频：./safemedia seal ~/Movies/a.mp4 -o ~/.safemedia/library/a.svid' \
+	  '  2) 封存视频：点索引页工具栏「封存」→「选择视频文件…／选择文件夹…」（或把视频拖进窗口）' \
+	  '     —— 也可以终端执行：./safemedia seal ~/Movies/a.mp4 -o ~/.safemedia/library/a.svid' \
 	  '  3) 回到登录页，选对账户并输入口令，解锁后点选播放' \
 	  '     （多个账户放在 ~/.safemedia/accounts/ 下会被自动列出；换扫描目录用索引页的「选择密档库」）' \
 	  '' \

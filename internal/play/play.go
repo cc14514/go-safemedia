@@ -40,6 +40,10 @@ type Options struct {
 	// SoftLock=true 时锁定时不关停服务，改为回到登录页（桌面外壳）；
 	// 默认 false：锁定即关停（CLI 既有行为，AC8.2）。
 	SoftLock bool
+
+	// Picker 提供系统原生的「选择视频文件…/选择文件夹…」对话框（US11）。
+	// 单密档模式没有封存面板，保留此注入面只为测试与调用方一致。
+	Picker FilePicker
 }
 
 // Server 是单密档播放服务。
@@ -87,6 +91,7 @@ func New(opts Options) (*Server, error) {
 		session:     session,
 		preUnlocked: opts.Reader != nil,
 		dropToken:   randomToken(), // 单密档模式不注入 Sealer → /drop 返回 409
+		picker:      opts.Picker,   // 单密档模式无封存面板；保留注入面以便测试
 	})
 
 	mux := http.NewServeMux()
